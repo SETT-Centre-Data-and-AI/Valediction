@@ -487,7 +487,7 @@ Dataset(len=4, dictionary_loaded=True,
 )
 ```
 ## 🤖 Convenience <a id="convenience"></a>
-For convenience, the entire validation process can be run in a single line with a function that wraps around the class creation methods. A dataset (folder or `dict` of _name: `DataFrame`_ pairs) can be provided alongside the dictionary (`Dictionary` or dictionary filepath).
+For convenience, the entire validation process can be run in a single line with a `validate()` function that wraps around the class creation methods. A dataset (folder or `dict` of _name: `DataFrame`_ pairs) can be provided alongside the dictionary (`Dictionary` or dictionary filepath).
 
 ```python
 import valediction as vale

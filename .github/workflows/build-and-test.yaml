@@ -1,0 +1,130 @@
+name: Build and Test
+
+# ======================================================================= #
+# Build and Test
+# builds and tests in PUBLIC repo when PR opened to main or release branch
+# ======================================================================= #
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+
+jobs:
+  env-config:
+    uses: ./.github/workflows/config.yaml
+
+  build-and-smoke-test:
+    needs: env-config
+    if: >
+      github.repository == needs.env-config.outputs.PRIVATE_REPO
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - os: ubuntu-latest
+          python-version: '3.13'
+
+    runs-on: ${{ matrix.os }}
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      PACKAGE_NAME: ${{ needs.env-config.outputs.PACKAGE_NAME }}
+      PRIVATE_REPO: ${{ needs.env-config.outputs.PRIVATE_REPO }}
+      PRIVATE_REPO_MAIN_BRANCH: ${{ needs.env-config.outputs.PRIVATE_REPO_MAIN_BRANCH }}
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install UV, Poetry, and tooling
+      run: |
+        python -m pip install --upgrade pip
+        pip install uv poetry build pytest
+
+    - name: Build Package
+      run: |
+        rm -rf dist
+        python -m build
+
+    - name: Install Package (Poetry)
+      run: |
+        poetry install
+        poetry run python -c "import $PACKAGE_NAME"
+
+    - name: Install Package (UV)
+      run: |
+        uv venv .venv-uv
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          source .venv-uv/Scripts/activate
+        else
+          source .venv-uv/bin/activate
+        fi
+
+        uv pip install dist/*.whl
+        python -c "import $PACKAGE_NAME"
+
+  run-tests:
+    needs: env-config
+    if: >
+      github.repository == needs.env-config.outputs.PRIVATE_REPO
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - os: ubuntu-latest
+          python-version: '3.11'
+        - os: ubuntu-latest
+          python-version: '3.12'
+        - os: ubuntu-latest
+          python-version: '3.13'
+        - os: windows-latest
+          python-version: '3.13'
+
+    runs-on: ${{ matrix.os }}
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      PACKAGE_NAME: ${{ needs.env-config.outputs.PACKAGE_NAME }}
+      PRIVATE_REPO: ${{ needs.env-config.outputs.PRIVATE_REPO }}
+      PRIVATE_REPO_MAIN_BRANCH: ${{ needs.env-config.outputs.PRIVATE_REPO_MAIN_BRANCH }}
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Install System Dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install UV and Tooling
+      run: |
+        python -m pip install --upgrade pip
+        pip install uv build pytest
+
+    - name: Install Package (UV)
+      run: |
+        uv sync
+
+    - name: Run Tests
+      run: |
+        uv run --active pytest

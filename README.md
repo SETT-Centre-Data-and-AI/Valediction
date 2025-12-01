@@ -43,8 +43,8 @@ from valediction import Dataset
 
 # Demo (replace appropriately)
 from valediction import demo
-PATH_TO_DATA = demo.DIR_DEMO # folder containing data .csv files
-PATH_TO_DICT = demo.PATH_DICTIONARY_DEMO # accompanying data dictionary
+PATH_TO_DATA = demo.PATH_TO_DATA # folder containing data .csv files
+PATH_TO_DICT = demo.PATH_TO_DICT # accompanying data dictionary
 ```
 ```python
 # Create Dataset & Import Dictionary
