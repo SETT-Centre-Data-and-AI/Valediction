@@ -8,7 +8,7 @@ from valediction.support import list_as_bullets
 ROOT = Path(__file__).resolve().parent
 DIR_DICTIONARY = ROOT / "dictionary"
 TEMPLATE_DATA_DICTIONARY_PATH = (
-    DIR_DICTIONARY / "template" / "Project - Data Dictionary.xltx"
+    DIR_DICTIONARY / "template" / "PROJECT - Data Dictionary.xltx"
 )
 
 

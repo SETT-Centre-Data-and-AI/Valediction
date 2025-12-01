@@ -1,0 +1,97 @@
+name: Publish to PyPI
+
+# ================================================================= #
+# Publish to PyPI
+# Publishes from PUBLIC repo manually or when PR to release is closed
+# ================================================================= #
+
+on:
+  pull_request:
+    branches: [release]
+    types: [closed]
+  workflow_dispatch: {}
+
+jobs:
+  env-config:
+    uses: ./.github/workflows/config.yaml
+
+  publish-to-pypi:
+    needs: env-config
+    if: > # in public repo, and PR merged or run manually
+      github.repository == needs.env-config.outputs.PUBLIC_REPO &&
+      (
+        (github.event_name == 'workflow_dispatch' &&
+         github.ref_name == needs.env-config.outputs.PUBLIC_REPO_RELEASE_BRANCH) ||
+        (github.event_name == 'pull_request' &&
+         github.event.pull_request.merged == true)
+      )
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    environment: pypi
+
+    env:
+      # From shared config
+      PACKAGE_NAME: ${{ needs.env-config.outputs.PACKAGE_NAME }}
+      PUBLIC_REPO: ${{ needs.env-config.outputs.PUBLIC_REPO }}
+      PUBLIC_REPO_RELEASE_BRANCH: ${{ needs.env-config.outputs.PUBLIC_REPO_RELEASE_BRANCH }}
+
+      # Publish config
+      PYTHON_VERSION: '3.13'
+      PYPI_USERNAME: __token__
+
+    steps:
+    - name: Show Publish Context
+      run: |
+        echo "Repo:        $GITHUB_REPOSITORY"
+        echo "Branch:      $GITHUB_REF_NAME"
+        echo "Event:       $GITHUB_EVENT_NAME"
+
+    - name: Verify PyPI token exists
+      env:
+        TOKEN: ${{ secrets.PYPI_TOKEN }}
+      run: |
+        if [ -z "$TOKEN" ]; then
+          echo "❌ ERROR: PYPI_TOKEN is missing or empty in repo secrets."
+          echo "Please set PYPI_TOKEN in the PUBLIC repository:"
+          echo "  Settings → Secrets and variables → Actions → PYPI_TOKEN"
+          exit 1
+        else
+          echo "✅ PYPI_TOKEN is present"
+        fi
+
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install Build Tools
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install --upgrade build twine
+
+    - name: Build Distributions
+      run: python -m build
+
+    - name: Validate Distributions
+      run: python -m twine check dist/*
+
+    - name: Install Wheel & Smoke Test
+      run: |
+        python -m pip install dist/*.whl
+        python - << 'PY'
+        import importlib
+        pkg = "${{ env.PACKAGE_NAME }}"
+        m = importlib.import_module(pkg)
+        print(f"{pkg} OK, version:", getattr(m, "__version__", "unknown"))
+        PY
+
+    - name: Publish to PyPI
+      env:
+        TWINE_USERNAME: ${{ env.PYPI_USERNAME }}
+        TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+      run: python -m twine upload dist/*
