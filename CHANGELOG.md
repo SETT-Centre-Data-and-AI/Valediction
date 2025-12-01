@@ -1,11 +1,9 @@
-## v1.0.0 (2025-11-05)
+## v1.0.3 (2025-12-01)
 
-### Feat
+## v1.0.2 (2025-12-01)
 
-- **publishing**: finalising
+### Fix
 
-## v0.4.0 (2025-11-05)
+- **integrity.py**: fixed case-sensitive template DD path for Linux
 
-### Feat
-
-- **publishing**: finalising
+## v1.0.0 (2025-12-01)

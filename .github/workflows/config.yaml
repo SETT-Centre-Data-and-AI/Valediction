@@ -1,0 +1,109 @@
+name: Environment Config
+
+# =================================================================== #
+# Shared Environment Variable Config
+# sets environment variables and repo settings for use across workflows
+# =================================================================== #
+
+on:
+  workflow_call:
+    outputs:
+
+      # Package
+      PACKAGE_NAME:
+        value: ${{ jobs.export-env.outputs.PACKAGE_NAME }}
+      PACKAGE_SLUG:
+        value: ${{ jobs.export-env.outputs.PACKAGE_SLUG }}
+
+      # Private Repo
+      PRIVATE_REPO:
+        value: ${{ jobs.export-env.outputs.PRIVATE_REPO }}
+      PRIVATE_REPO_MAIN_BRANCH:
+        value: ${{ jobs.export-env.outputs.PRIVATE_REPO_MAIN_BRANCH }}
+      PRIVATE_REPO_RELEASE_BRANCH:
+        value: ${{ jobs.export-env.outputs.PRIVATE_REPO_RELEASE_BRANCH }}
+      PRIVATE_REPO_INCOMING_BRANCH:
+        value: ${{ jobs.export-env.outputs.PRIVATE_REPO_INCOMING_BRANCH }}
+
+      # Public Repo
+      PUBLIC_REPO:
+        value: ${{ jobs.export-env.outputs.PUBLIC_REPO }}
+      PUBLIC_REPO_RELEASE_BRANCH:
+        value: ${{ jobs.export-env.outputs.PUBLIC_REPO_RELEASE_BRANCH }}
+      PUBLIC_REPO_INCOMING_BRANCH:
+        value: ${{ jobs.export-env.outputs.PUBLIC_REPO_INCOMING_BRANCH }}
+
+      # Tokens (derived from secrets, not echoed)
+      REPO_SYNC_TOKEN:
+        value: ${{ jobs.export-env.outputs.REPO_SYNC_TOKEN }}
+      PYPI_TOKEN:
+        value: ${{ jobs.export-env.outputs.PYPI_TOKEN }}
+
+
+
+# =================
+# Manual Config
+# =================
+env:
+  # Package
+  PACKAGE_NAME: valediction
+  PACKAGE_SLUG: valediction
+
+  # Private Repo
+  PRIVATE_REPO: SETT-Centre-Data-and-AI/Valediction_development
+  PRIVATE_REPO_MAIN_BRANCH: main                        # when PR opened, triggers install & smoke test
+  PRIVATE_REPO_RELEASE_BRANCH: release                  # when PR merged, triggers PR to public repo
+  PRIVATE_REPO_INCOMING_BRANCH: incoming_from_public    # mirrors incoming from public
+
+  # Public Repo
+  PUBLIC_REPO: SETT-Centre-Data-and-AI/Valediction
+  PUBLIC_REPO_INCOMING_BRANCH: incoming_from_private    # mirrors incoming from private
+  PUBLIC_REPO_RELEASE_BRANCH: release                   # when PR closed, trigger PyPI publish
+# =================
+# End Manual Config
+# =================
+
+
+jobs:
+  export-env:
+    runs-on: ubuntu-latest
+    outputs:
+
+      # Package
+      PACKAGE_NAME: ${{ steps.set.outputs.PACKAGE_NAME }}
+      PACKAGE_SLUG: ${{ steps.set.outputs.PACKAGE_SLUG }}
+
+      # Private Repo
+      PRIVATE_REPO: ${{ steps.set.outputs.PRIVATE_REPO }}
+      PRIVATE_REPO_MAIN_BRANCH: ${{ steps.set.outputs.PRIVATE_REPO_MAIN_BRANCH }}
+      PRIVATE_REPO_RELEASE_BRANCH: ${{ steps.set.outputs.PRIVATE_REPO_RELEASE_BRANCH }}
+      PRIVATE_REPO_INCOMING_BRANCH: ${{ steps.set.outputs.PRIVATE_REPO_INCOMING_BRANCH }}
+
+      # Public Repo
+      PUBLIC_REPO: ${{ steps.set.outputs.PUBLIC_REPO }}
+      PUBLIC_REPO_RELEASE_BRANCH: ${{ steps.set.outputs.PUBLIC_REPO_RELEASE_BRANCH }}
+      PUBLIC_REPO_INCOMING_BRANCH: ${{ steps.set.outputs.PUBLIC_REPO_INCOMING_BRANCH }}
+
+      # Tokens
+      REPO_SYNC_TOKEN: ${{ steps.set.outputs.REPO_SYNC_TOKEN }}
+      PYPI_TOKEN: ${{ steps.set.outputs.PYPI_TOKEN }}
+
+
+    steps:
+    - id: set
+      run: |2
+
+        # Package
+        echo "PACKAGE_NAME=${{ env.PACKAGE_NAME }}" >> "$GITHUB_OUTPUT"
+        echo "PACKAGE_SLUG=${{ env.PACKAGE_SLUG }}" >> "$GITHUB_OUTPUT"
+
+        # Private Repo
+        echo "PRIVATE_REPO=${{ env.PRIVATE_REPO }}" >> "$GITHUB_OUTPUT"
+        echo "PRIVATE_REPO_MAIN_BRANCH=${{ env.PRIVATE_REPO_MAIN_BRANCH }}" >> "$GITHUB_OUTPUT"
+        echo "PRIVATE_REPO_RELEASE_BRANCH=${{ env.PRIVATE_REPO_RELEASE_BRANCH }}" >> "$GITHUB_OUTPUT"
+        echo "PRIVATE_REPO_INCOMING_BRANCH=${{ env.PRIVATE_REPO_INCOMING_BRANCH }}" >> "$GITHUB_OUTPUT"
+
+        # Public Repo
+        echo "PUBLIC_REPO=${{ env.PUBLIC_REPO }}" >> "$GITHUB_OUTPUT"
+        echo "PUBLIC_REPO_RELEASE_BRANCH=${{ env.PUBLIC_REPO_RELEASE_BRANCH }}" >> "$GITHUB_OUTPUT"
+        echo "PUBLIC_REPO_INCOMING_BRANCH=${{ env.PUBLIC_REPO_INCOMING_BRANCH }}" >> "$GITHUB_OUTPUT"
