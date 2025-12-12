@@ -3,12 +3,11 @@ from pathlib import Path
 from pandas import DataFrame
 
 from valediction.datasets.datasets import Dataset
-from valediction.dictionary.importing import import_dictionary
 from valediction.dictionary.model import Dictionary
 
 
 def validate(
-    data: str | Path | dict[str, DataFrame] | Dictionary,
+    dataset: str | Path | dict[str, DataFrame],
     dictionary: Dictionary | str | Path,
     *,
     import_data: bool = False,
@@ -31,20 +30,16 @@ def validate(
     Returns:
         Dataset: dataset, with or without Issues
     """
-    dictionary = (
-        dictionary
-        if isinstance(dictionary, Dictionary)
-        else import_dictionary(dictionary)
-    )
-    data: Dataset = Dataset.create_from(data)
-    data.import_dictionary(dictionary)
+
+    _dataset: Dataset = Dataset.create_from(dataset)
+    _dataset.import_dictionary(dictionary)
 
     if import_data:
-        data.import_data()
+        _dataset.import_data()
 
-    data.validate(
+    _dataset.validate(
         chunk_size=chunk_size,
         feedback=feedback,
     )
 
-    return data
+    return _dataset

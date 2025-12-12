@@ -33,7 +33,7 @@ def build_dataset() -> Dataset:
 
 
 def validate() -> Dataset:
-    return _validate(data=DEMO_DATA, dictionary=demo_dictionary())
+    return _validate(dataset=DEMO_DATA, dictionary=demo_dictionary())
 
 
 # Test Dictionaries

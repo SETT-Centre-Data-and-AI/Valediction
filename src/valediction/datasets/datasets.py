@@ -135,16 +135,16 @@ class DatasetItem:
     # Validation
     def validate(
         self,
-        chunk_size: int = None,
+        chunk_size: int | None = 10_000_000,
         feedback: bool = True,
-    ):
+    ) -> None:
         """
         Summary:
             Validates the dataset item against the dictionary.
             Warns if there are issues with the integrity of the data.
 
         Arguments:
-            chunk_size (int): Size of chunks for validating data to optimise RAM usage,
+            chunk_size (int | None): Size of chunks for validating data to optimise RAM usage,
                 if reading from CSV (default: 10_000_000)
             feedback (bool): Provide user feedback on progress (default: True)
 
@@ -710,7 +710,7 @@ class Dataset(list[DatasetItem]):
     # Validation
     def validate(
         self,
-        chunk_size: int = None,
+        chunk_size: int | None = 10_000_000,
         feedback: bool = True,
     ) -> None:
         """
@@ -751,7 +751,7 @@ class Dataset(list[DatasetItem]):
         if feedback:
             print("\n", end="")
 
-    def __reattach_issues(self):
+    def __reattach_issues(self) -> None:
         self.issues = Issues()
         for item in self:
             self.issues.extend(item.issues)
