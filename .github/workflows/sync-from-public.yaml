@@ -93,7 +93,12 @@ jobs:
     - name: Push to Private as incoming_from_public
       env:
         INCOMING_BRANCH: ${{ env.PRIVATE_REPO_INCOMING_BRANCH }}
+        PRIVATE_REPO: ${{ env.PRIVATE_REPO }}
+        TOKEN: ${{ env.REPO_SYNC_TOKEN }}
       run: |
+        echo "Configuring origin with PAT..."
+        git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
+
         echo "Pushing '${INCOMING_BRANCH}' to origin..."
         git push origin "${INCOMING_BRANCH}:refs/heads/${INCOMING_BRANCH}" --force
 

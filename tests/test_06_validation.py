@@ -445,14 +445,14 @@ def test_raises_apply_without_validation():
 
 def test_validate_convenience(chunk_size):
     dataset = validate(
-        data=DEMO_DATA, dictionary=DEMO_DICTIONARY, chunk_size=chunk_size
+        dataset=DEMO_DATA, dictionary=DEMO_DICTIONARY, chunk_size=chunk_size
     )
     dataset.check()
 
 
 def test_validate_convenience_with_import(chunk_size):
     dataset = validate(
-        data=DEMO_DATA,
+        dataset=DEMO_DATA,
         dictionary=DEMO_DICTIONARY,
         chunk_size=chunk_size,
         import_data=True,
@@ -464,7 +464,7 @@ def test_validate_convenience_raises_error(chunk_size):
     config = get_config()
     config.forbidden_characters = ["a"]
     dataset = validate(
-        data=DEMO_DATA,
+        dataset=DEMO_DATA,
         dictionary=DEMO_DICTIONARY,
         chunk_size=chunk_size,
         import_data=True,

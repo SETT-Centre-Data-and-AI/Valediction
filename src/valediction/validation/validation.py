@@ -62,7 +62,7 @@ class Validator:
         dataset_item: DatasetItemLike,
         table_dictionary: Table,
         feedback: bool = True,
-        chunk_size: int = 10_000_000,
+        chunk_size: int | None = 10_000_000,
         _padding: int = 0,
     ):
         # User Variables
