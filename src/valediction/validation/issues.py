@@ -8,7 +8,7 @@ from pandas import DataFrame, concat
 
 from valediction.datasets.datasets_helpers import DatasetItemLike
 from valediction.io.csv_readers import CsvReadConfig, read_csv_ranges
-from valediction.support import _normalise_name, list_as_bullets
+from valediction.support import _strip, list_as_bullets
 
 
 class IssueType(Enum):
@@ -107,6 +107,7 @@ class Issue:
         merged.append(cur)
         self.ranges = merged
 
+    # Inspect
     def inspect(
         self,
         additional_columns: bool | str | list[str] | None = None,
@@ -132,9 +133,9 @@ class Issue:
             ValueError: if the issue has no parent DatasetItem
         """
         # Guard
-        if not self.parent:
-            raise ValueError("Issue has no parent DatasetItem")
+        self.__guard_parent()
         header = self.__repr__() if print_header else ""
+
         # Not applicable
         if self.type in APPLIES_WHOLE_COLUMN:
             print(f"{header}: applies to whole column")
@@ -143,22 +144,8 @@ class Issue:
         # Column Inclusion
         if print_header:
             print(f"{header}:")
-        if additional_columns is True:
-            columns = None
-        else:
-            additional_columns = (
-                [additional_columns]
-                if isinstance(additional_columns, str)
-                else additional_columns
-            )
-            base = (
-                set(self.parent.primary_keys)
-                if self.type in PRIMARY_KEY_ISSUES
-                else {self.column}
-            )
-            base |= set(additional_columns or [])
-            base.discard(None)
-            columns = list(base) if base else None
+
+        columns = self.__select_columns(additional_columns)
 
         if not self.ranges:
             return DataFrame(columns=columns) if columns else DataFrame()
@@ -193,6 +180,31 @@ class Issue:
             out = read_csv_ranges(path, spans, cfg=cfg, chunk_size=chunk_size)
 
         return out if columns is None else out.loc[:, columns]
+
+    # Inspect Helpers
+    def __guard_parent(self):
+        if not self.parent:
+            raise ValueError("Issue has no parent DatasetItem")
+
+    def __select_columns(self, additional_columns: bool | str | list[str]) -> list:
+        if additional_columns is True:
+            columns = None
+        else:
+            additional_columns = (
+                [additional_columns]
+                if isinstance(additional_columns, str)
+                else additional_columns
+            )
+            base = (
+                set(self.parent.primary_keys)
+                if self.type in PRIMARY_KEY_ISSUES
+                else {self.column}
+            )
+            base |= set(additional_columns or [])
+            base.discard(None)
+            columns = list(base) if base else None
+
+        return columns
 
 
 @dataclass
@@ -235,8 +247,8 @@ class Issues:
         parent: DatasetItemLike | None = None,
     ) -> Issue:
         key = (
-            _normalise_name(table),
-            _normalise_name(column) if column is not None else None,
+            _strip(table),
+            _strip(column) if column is not None else None,
             issue_type,
         )
         issue = self._index.get(key)
@@ -255,8 +267,8 @@ class Issues:
         issue_type: IssueType | None = None,
     ) -> list[Issue]:
         """Case-insensitive filter; any arg can be None to act as a wildcard."""
-        table = _normalise_name(table)
-        column = _normalise_name(column) if column is not None else None
+        table = _strip(table)
+        column = _strip(column) if column is not None else None
         output: list[Issue] = []
         if issue_type is not None:
             # direct index lookup where possible
@@ -268,9 +280,9 @@ class Issues:
 
         # otherwise scan (still cheap; we maintain a compact list)
         for item in self._items:
-            if _normalise_name(item.table) != table:
+            if _strip(item.table) != table:
                 continue
-            if column is not None and (_normalise_name(item.column) or "") != column:
+            if column is not None and (_strip(item.column) or "") != column:
                 continue
             output.append(item)
         return output

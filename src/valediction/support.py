@@ -35,8 +35,12 @@ def list_as_bullets(elements: list, bullet: str = "\n - ") -> str:
     return bullet + bullet.join(elements)
 
 
-def _normalise_name(name: str) -> str:
+def _normalise(name: str) -> str:
     return name.strip().upper()
+
+
+def _strip(name: str) -> str:
+    return name.strip()
 
 
 def _get_runtime_string(runtime: timedelta) -> str:

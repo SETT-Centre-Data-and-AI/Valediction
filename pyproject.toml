@@ -1,6 +1,6 @@
 [project]
 name = "valediction"
-version = "1.1.0"
+version = "1.2.0"
 description = "Valediction is a convenience data validation package that allows generation, import, and constraint enforcement of user-defined data dictionaries against datasets."
 authors = [{ name = "Cai Davis", email = "Cai.Davis@uhs.nhs.uk" }]
 requires-python = ">=3.11,<4.0"

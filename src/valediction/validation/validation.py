@@ -20,7 +20,7 @@ from valediction.io.csv_readers import (
     iter_csv_chunks,
 )
 from valediction.progress import Progress
-from valediction.support import _get_runtime_string, calculate_runtime
+from valediction.support import _get_runtime_string, _normalise, calculate_runtime
 from valediction.validation.helpers import (
     _column_has_values,
     _set_nulls,
@@ -86,7 +86,9 @@ class Validator:
         self._dt_needs_infer: set[str] = set()
 
         #  Helpers
-        self._column_names: set = set(self.table_dictionary.get_column_names())
+        self._column_names: set[str] = {
+            _normalise(n) for n in self.table_dictionary.get_column_names()
+        }
 
         # Progress Tracking
         self.progress: Progress | None = None
@@ -154,6 +156,20 @@ class Validator:
 
                 if not datetime_format:
                     self._dt_needs_infer.add(name)
+
+    # Column Scanning
+    def _resolve_df_col(self, df: DataFrame, name: str) -> str | None:
+        """Return the actual df column label matching name case-insensitively."""
+        target = _normalise(name)
+        return next((c for c in df.columns if _normalise(str(c)) == target), None)
+
+    def _resolve_df_cols(self, df: DataFrame, names: list[str]) -> list[str]:
+        resolved: list[str] = []
+        for n in names:
+            c = self._resolve_df_col(df, n)
+            if c is not None:
+                resolved.append(c)
+        return resolved
 
     # Validate
     def validate(self):
@@ -272,28 +288,45 @@ class Validator:
     # Validation: Start Helpers
     def _check_for_missing_columns(self, df: DataFrame):
         self.__begin_step(step="Checking for missing columns")
-        missing = self._column_names - set(df.columns)
-        if missing:
-            for column in missing:
-                self.issues.add(
-                    issue_type=IssueType.MISSING_COLUMN,
-                    table=self.table_name,
-                    column=column,
-                    parent=self.dataset_item,
-                )
+
+        dict_names = self.table_dictionary.get_column_names()
+        dict_keys = {_normalise(name) for name in dict_names}
+
+        df_keys = {_normalise(str(column)) for column in df.columns}
+
+        missing_keys = dict_keys - df_keys
+        if missing_keys:
+            for name in dict_names:
+                if _normalise(name) in missing_keys:
+                    self.issues.add(
+                        issue_type=IssueType.MISSING_COLUMN,
+                        table=self.table_name,
+                        column=name,
+                        parent=self.dataset_item,
+                    )
+
         self.__complete_step()
 
     def _check_for_extra_columns(self, df: DataFrame):
         self.__begin_step(step="Checking for extra columns")
-        extra = set(df.columns) - self._column_names
-        if extra:
-            for column in extra:
-                self.issues.add(
-                    issue_type=IssueType.EXTRA_COLUMN,
-                    table=self.table_name,
-                    column=column,
-                    parent=self.dataset_item,
-                )
+
+        dict_keys = {
+            _normalise(name) for name in self.table_dictionary.get_column_names()
+        }
+        df_cols = [str(column) for column in df.columns]
+        df_keys = {_normalise(column) for column in df_cols}
+
+        extra_keys = df_keys - dict_keys
+        if extra_keys:
+            for col in df_cols:
+                if _normalise(col) in extra_keys:
+                    self.issues.add(
+                        issue_type=IssueType.EXTRA_COLUMN,
+                        table=self.table_name,
+                        column=col,  # report the actual df label
+                        parent=self.dataset_item,
+                    )
+
         self.__complete_step()
 
     # Validation: Chunk Helpers
@@ -319,13 +352,16 @@ class Validator:
 
         # Check for whitespace (text cols only)
         self.__begin_step(step="Checking for primary key whitespace")
-        pk_cols_text = []
-        for column in self.table_dictionary:
-            if column.name in pk_cols and column.data_type in [DataType.TEXT]:
-                pk_cols_text.append(column.name)
+        pk_keys = {_normalise(p) for p in pk_cols}
+        pk_cols_text = [
+            column.name
+            for column in self.table_dictionary
+            if _normalise(column.name) in pk_keys and column.data_type is DataType.TEXT
+        ]
 
         if pk_cols_text:
-            space_mask = pk_contains_whitespace_mask(df[pk_cols_text])
+            pk_cols_text_df = self._resolve_df_cols(df, pk_cols_text)
+            space_mask = pk_contains_whitespace_mask(df[pk_cols_text_df])
             if space_mask.any():
                 self.issues.add(
                     issue_type=IssueType.PK_WHITESPACE,
@@ -343,7 +379,9 @@ class Validator:
 
         # Create primary key hashes
         self.__begin_step(step="Creating primary key hashes")
-        pk_hashes = create_pk_hashes(df[pk_cols])
+        pk_cols_df = self._resolve_df_cols(df, pk_cols)
+        pk_hashes = create_pk_hashes(df[pk_cols_df])
+
         self.__complete_step()
 
         # Primary Key Nulls
@@ -437,44 +475,51 @@ class Validator:
             self.__complete_step()
             return
 
-        columns = [col for col in self._dt_needs_infer if col in df.columns]
-        if not columns:
+        cols = [
+            (dict_col, df_col)
+            for dict_col in self._dt_needs_infer
+            if (df_col := self._resolve_df_col(df, dict_col)) is not None
+        ]
+        if not cols:
             self.__complete_step()
             return
 
-        for column in columns:
-            series = df[column].astype("string", copy=False).str.strip()
-            unique = series.dropna().unique()
+        from valediction.validation.helpers import _allowed_formats_for
+
+        for dict_col, df_col in cols:
+            unique = (
+                df[df_col].astype("string", copy=False).str.strip().dropna().unique()
+            )
             if len(unique) == 0:
                 continue
 
             try:
-                fmt_or_false = infer_datetime_format(Series(unique, dtype="string"))
+                fmt = infer_datetime_format(Series(unique, dtype="string"))
             except ValueError:
-                # ambiguous - try again in later chunk
                 continue
 
-            if fmt_or_false and fmt_or_false is not False:
-                col_dtype = self._find_data_type(column)
-                from valediction.validation.helpers import _allowed_formats_for
+            if not fmt or fmt is False:
+                continue
 
-                allowed = _allowed_formats_for(col_dtype)
-                if fmt_or_false in allowed:
-                    self._dt_format_cache[column] = fmt_or_false
-                    self._dt_needs_infer.discard(column)
+            col_dtype = self._find_data_type(dict_col)  # case-insensitive getter
+            if fmt not in _allowed_formats_for(col_dtype):
+                continue
 
-                    # Persist in the dictionary
-                    try:
-                        self.table_dictionary.get_column(
-                            column
-                        ).datetime_format = fmt_or_false
-                    except Exception:
-                        pass
+            self._dt_format_cache[dict_col] = fmt
+            self._dt_needs_infer.discard(dict_col)
+
+            try:
+                self.table_dictionary.get_column(dict_col).datetime_format = fmt
+            except Exception:
+                pass
+
         self.__complete_step()
 
     def _check_column_types(self, df: DataFrame, start_row: int) -> None:
         self.__begin_step(step="Checking column types")
-        present = [col for col in df.columns if col in self._column_names]
+        present = [
+            col for col in df.columns if _normalise(str(col)) in self._column_names
+        ]
         for col in present:
             dtype = self._find_data_type(col)
             if dtype == DataType.TEXT:
@@ -506,7 +551,9 @@ class Validator:
 
     def _check_text_lengths(self, df: DataFrame, start_row: int) -> None:
         self.__begin_step(step="Checking text lengths")
-        present = [col for col in df.columns if col in self._column_names]
+        present = [
+            col for col in df.columns if _normalise(str(col)) in self._column_names
+        ]
         for col in present:
             if self._find_data_type(col) != DataType.TEXT:
                 continue
@@ -524,7 +571,9 @@ class Validator:
 
     def _check_text_forbidden_chars(self, df: DataFrame, start_row: int) -> None:
         self.__begin_step(step="Checking for forbidden characters")
-        present = [col for col in df.columns if col in self._column_names]
+        present = [
+            col for col in df.columns if _normalise(str(col)) in self._column_names
+        ]
         for col in present:
             if self._find_data_type(col) != DataType.TEXT:
                 continue

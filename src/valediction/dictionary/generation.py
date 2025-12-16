@@ -24,7 +24,7 @@ from valediction.io.csv_readers import (
     read_csv_sample,
 )
 from valediction.progress import Progress
-from valediction.support import _normalise_name, calculate_runtime
+from valediction.support import _strip, calculate_runtime
 
 IMPORTING_DATA = "Importing data"
 CHUNK_STEPS = 1
@@ -124,7 +124,7 @@ class Generator:
         self.__say(f"Generating dictionary for {len(items)} tables")
         for item in items:
             self.__progress_init(item)
-            table = Table(name=_normalise_name(item.name))
+            table = Table(name=_strip(item.name))
             dictionary.add_table(table)
 
             if item.is_path:
@@ -192,7 +192,7 @@ class Generator:
                     col_state = inferer.states[col_name]
                     data_type, length = col_state.final_data_type_and_length()
                     col = Column(
-                        name=_normalise_name(col_name),
+                        name=_strip(col_name),
                         order=idx,
                         data_type=data_type,
                         length=length if data_type == DataType.TEXT else None,
@@ -242,7 +242,7 @@ class Generator:
             col_state = inferer.states[col_name]
             data_type, length = col_state.final_data_type_and_length()
             col = Column(
-                name=_normalise_name(col_name),
+                name=_strip(col_name),
                 order=idx,
                 data_type=data_type,
                 length=length if data_type == DataType.TEXT else None,
@@ -277,7 +277,7 @@ class Generator:
                 next_order = max((c.order or 0 for c in table), default=0) + 1
                 data_type, length = col_state.final_data_type_and_length()
                 new_col = Column(
-                    name=_normalise_name(col_name),
+                    name=_strip(col_name),
                     order=next_order,
                     data_type=data_type,
                     length=length if data_type == DataType.TEXT else None,

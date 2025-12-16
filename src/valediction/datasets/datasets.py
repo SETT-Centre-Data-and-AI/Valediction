@@ -20,7 +20,8 @@ from valediction.io.csv_readers import (
 )
 from valediction.support import (
     _get_runtime_string,
-    _normalise_name,
+    _normalise,
+    _strip,
     list_as_bullets,
     print_bold_red,
     print_red,
@@ -437,16 +438,16 @@ class Dataset(list[DatasetItem]):
 
     # Getters
     def get(self, name: str, default: DatasetItem | None = None) -> DatasetItem | None:
-        name_key = name.strip()
+        name_key = _normalise(name)
         for item in self:
-            if item.name.lower() == name_key.lower():
+            if _normalise(item.name) == name_key:
                 return item
         return default
 
     def index_of(self, name: str) -> int | None:
-        name_key = name.strip()
+        name_key = _normalise(name)
         for i, item in enumerate(self):
-            if item.name == name_key:
+            if _normalise(item.name) == name_key:
                 return i
         return None
 
@@ -796,20 +797,21 @@ class Dataset(list[DatasetItem]):
         name: str | None,
         data: DataLike,
     ) -> DatasetItem:
-        """Normalise a (data, name) double into a DatasetItem."""
+        """Normalise a (name, data) double into a DatasetItem."""
         if isinstance(data, (str, Path)):
             path = Path(data)
             if not path.exists():
                 raise FileNotFoundError(f"File not found: {path}")
             if path.suffix.lower() != ".csv":
                 raise ValueError(f"Only .csv supported right now, got: {path}")
-            resolved_name = _normalise_name(name or path.stem)
+            resolved_name = _strip(name or path.stem)
             return DatasetItem(name=resolved_name, data=path.resolve())
 
         if isinstance(data, DataFrame):
             if not name:
                 raise ValueError("When providing a DataFrame, 'name' is required.")
-            resolved_name = _normalise_name(name)
+            resolved_name = _strip(name)
+            data.columns = [_strip(column) for column in data.columns]
             return DatasetItem(name=resolved_name, data=data)
 
         raise TypeError("data must be a Path/str to .csv or a pandas DataFrame.")
@@ -823,13 +825,11 @@ class Dataset(list[DatasetItem]):
         if p.is_file():
             if p.suffix.lower() != ".csv":
                 raise ValueError(f"Expected a .csv file, got: {p.suffix} ({p})")
-            return [DatasetItem(name=_normalise_name(p.stem), data=p.resolve())]
+            return [DatasetItem(name=_strip(p.stem), data=p.resolve())]
 
         if p.is_dir():
             return [
-                DatasetItem(
-                    name=_normalise_name(csv_path.stem), data=csv_path.resolve()
-                )
+                DatasetItem(name=_strip(csv_path.stem), data=csv_path.resolve())
                 for csv_path in p.glob("*.csv")
             ]
 

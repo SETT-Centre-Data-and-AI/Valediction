@@ -10,6 +10,7 @@ from pandas.util import hash_pandas_object
 from valediction.data_types.data_types import DataType
 from valediction.dictionary.model import Table
 from valediction.integrity import get_config
+from valediction.support import _normalise
 from valediction.validation.issues import Range
 
 
@@ -17,11 +18,14 @@ from valediction.validation.issues import Range
 def _set_nulls(df: DataFrame) -> DataFrame:
     null_values = get_config().null_values
     token_set = {str(t).strip().casefold() for t in null_values}
-    columns = df.select_dtypes(include=["string", "object"]).columns
+    columns = df.select_dtypes(include=["string", "object", "category"]).columns
     for column in columns:
         series = df[column]
-        mask = series.notna() & series.str.casefold().isin(token_set)
-        df[column] = series.mask(mask, NA)
+
+        s_txt = series.astype("string", copy=False)  # dtype safe
+        mask = s_txt.notna() & s_txt.str.strip().str.casefold().isin(token_set)
+        if mask.any():
+            df[column] = series.mask(mask, NA)
 
     return df
 
@@ -68,37 +72,24 @@ def create_pk_hashes(
     Returns:
         Series: Pandas Series with hashes or Nulls.
     """
-    hash_col_name = "PK_HASH"
+    HASH_COL_NAME = "PK_HASH"
     if df_primaries.empty or df_primaries.shape[1] == 0:
-        return Series([], dtype=object, name=hash_col_name)
+        return Series([], dtype=object, name=HASH_COL_NAME)
 
-    # Any NA in row => invalid PK -> None
+    # Check Nulls
     null_rows = df_primaries.isna().any(axis=1)
 
-    # First Hash
-    hash_1 = hash_pandas_object(df_primaries, index=False)  # uint64
+    # Two independent 64-bit hashes with 16 byte keys
+    hash_1 = hash_pandas_object(df_primaries, index=False, hash_key="valediction_pk1!")
+    hash_2 = hash_pandas_object(df_primaries, index=False, hash_key="valediction_pk2!")
 
-    # Second Hash (rows backwards if single row, else salt)
-    if df_primaries.shape[1] > 1:
-        df_primaries_backwards = df_primaries.iloc[:, ::-1]
-    else:
-        s = df_primaries.iloc[:, 0]
-        salt = Series(["§"] * len(s), index=s.index, dtype="string")
-        df_primaries_backwards = DataFrame(
-            {
-                "_a": s,
-                "_b": s.str.cat(salt),
-            }
-        )
-
-    hash_2 = hash_pandas_object(df_primaries_backwards, index=False)  # uint64
-
+    # Combine into 128-bit integer keys
     a1 = hash_1.to_numpy(dtype="uint64", copy=False).astype(object)
     a2 = hash_2.to_numpy(dtype="uint64", copy=False).astype(object)
-
     combined = (a1 << 64) | a2
+
     hashes = Series(
-        combined, index=df_primaries.index, name=hash_col_name, dtype=object
+        combined, index=df_primaries.index, name=HASH_COL_NAME, dtype=object
     )
     hashes[null_rows] = None
     return hashes
@@ -167,8 +158,9 @@ def pk_contains_whitespace_mask(df_primaries: DataFrame) -> Series:
     if df_primaries.empty or df_primaries.shape[1] == 0:
         return Series(False, index=df_primaries.index)
 
-    col_masks = df_primaries.apply(lambda s: s.str.contains(r"\s", na=False))
-
+    col_masks = df_primaries.apply(
+        lambda s: s.astype("string", copy=False).str.contains(r"\s", na=False)
+    )
     return col_masks.any(axis=1)
 
 
@@ -261,7 +253,9 @@ def invalid_mask_text_too_long(column: Series, max_len: int) -> Series:
         return Series(False, index=column.index)
 
     notnull = column.notna()
-    lens = column.str.len()
+    s_txt = column.astype("string", copy=False)
+    lens = s_txt.str.len()
+
     return notnull & (lens > max_len)
 
 
@@ -270,20 +264,23 @@ def invalid_mask_text_forbidden_characters(column: Series) -> Series:
     if not forbidden:
         return column.notna() & False
 
-    pattern = "[" + re.escape("".join(forbidden)) + "]"
+    pattern = "[" + re.escape("".join([str(s) for s in forbidden])) + "]"
     notnull = column.notna()
-    has_forbidden = column.str.contains(pattern, regex=True, na=False)
+
+    s_txt = column.astype("string", copy=False)
+    has_forbidden = s_txt.str.contains(pattern, regex=True, na=False)
+
     return notnull & has_forbidden
 
 
 # Apply Data Types #
 def apply_data_types(df: DataFrame, table_dictionary: Table) -> DataFrame:
     # name -> column object
-    column_dictionary = {column.name: column for column in table_dictionary}
+    column_dictionary = {_normalise(column.name): column for column in table_dictionary}
 
     for col in df.columns:
-        data_type = column_dictionary.get(col).data_type
-        datetime_format = column_dictionary.get(col).datetime_format
+        data_type = column_dictionary.get(_normalise(col)).data_type
+        datetime_format = column_dictionary.get(_normalise(col)).datetime_format
 
         if data_type in (DataType.TEXT, DataType.FILE):
             df[col] = df[col].astype("string")
