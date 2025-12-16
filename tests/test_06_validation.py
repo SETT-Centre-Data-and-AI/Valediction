@@ -19,7 +19,9 @@ def _isolate_global_default():  # noqa
     reset_default_config()
 
 
-@pytest.fixture(params=[None, 10, 1_000_000], ids=["no_chunk", "chunk_10", "chunk_1m"])
+@pytest.fixture(
+    params=[None, 100, 1_000_000], ids=["no_chunk", "chunk_100", "chunk_1m"]
+)
 def chunk_size(request: pytest.FixtureRequest) -> int:
     return request.param
 

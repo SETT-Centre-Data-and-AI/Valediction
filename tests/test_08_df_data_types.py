@@ -52,7 +52,7 @@ def test_imports_as_strings() -> None:
 def test_types_applied_import_then_validate() -> None:
     dataset = get_dataset()
     dataset.import_data()
-    dataset.validate()
+    dataset.validate(feedback=False)
 
     for item in dataset:
         check_column_dtypes(item.data, item.table_dictionary)
@@ -60,7 +60,7 @@ def test_types_applied_import_then_validate() -> None:
 
 def test_types_applied_validate_then_import() -> None:
     dataset = get_dataset()
-    dataset.validate()
+    dataset.validate(feedback=False)
     dataset.import_data()
 
     for item in dataset:
@@ -77,7 +77,7 @@ def test_types_string_on_chunking() -> None:
 
 def test_types_applied_on_validate_then_chunking() -> None:
     dataset = get_dataset()
-    dataset.validate()
+    dataset.validate(feedback=False)
     for item in dataset:
         for chunk in item.iterate_data_chunks():
             df = chunk.df
@@ -86,7 +86,7 @@ def test_types_applied_on_validate_then_chunking() -> None:
 
 def test_types_applied_on_chunking_when_imported() -> None:
     dataset = get_dataset()
-    dataset.validate()
+    dataset.validate(feedback=False)
     dataset.import_data()
     for item in dataset:
         for chunk in item.iterate_data_chunks():

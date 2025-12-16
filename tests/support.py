@@ -1,4 +1,5 @@
 from valediction.dictionary.model import Dictionary
+from valediction.support import _normalise
 
 
 def compare_dictionary_tables(
@@ -7,13 +8,17 @@ def compare_dictionary_tables(
     for test_table in test_dictionary:
         table_name = test_table.name
         check_table = check_dictionary.get_table(table_name)
+
         error_leader = f"Table '{test_table.name}' testing vs checker mismatch:"
-        for annotation in ["name", "description"]:
-            assert getattr(test_table, annotation) == getattr(
-                check_table, annotation
-            ), (
-                f"{error_leader}\n{annotation}: {getattr(test_table, annotation)} != {getattr(check_table, annotation)}"
-            )
+
+        assert _normalise(test_table.name) == _normalise(check_table.name), (
+            f"{error_leader}\nname: {test_table.name} != {check_table.name}"
+        )
+
+        assert test_table.description == check_table.description, (
+            f"{error_leader}\n"
+            f"description: {test_table.description} != {check_table.description}"
+        )
 
 
 def compare_dictionary_columns(

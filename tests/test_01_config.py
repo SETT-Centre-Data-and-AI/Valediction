@@ -1,19 +1,25 @@
+import importlib
+
 import pytest
 
 from valediction.data_types.data_types import DataType
 from valediction.integrity import (
     Config,
     get_config,
+    inject_config_variables,
     reset_default_config,
+    reset_injected_config_variables,
 )
 
 
 # Parameters
 @pytest.fixture(autouse=True)
 def _isolate_global_default():  # noqa
-    """Ensure each test starts from a clean global default and leaves it clean."""
+    """Ensure each test starts clean and leaves it clean."""
+    reset_injected_config_variables()
     reset_default_config()
     yield
+    reset_injected_config_variables()
     reset_default_config()
 
 
@@ -58,8 +64,8 @@ def test_reset_default_config_restores_original_defaults():
 
 def test_date_formats_have_expected_entries_and_types():
     """date_formats should contain the expected keys and DataType values."""
-    cfg = get_config()
-    df = cfg.date_formats
+    config = get_config()
+    df = config.date_formats
 
     must_exist = [
         "%Y-%m-%d",
@@ -76,20 +82,76 @@ def test_date_formats_have_expected_entries_and_types():
 
 
 def test_mutating_nested_structures_affects_global_and_is_detected_against_fresh():
-    cfg = get_config()
+    config = get_config()
 
     # mutate nested list
-    cfg.null_values.append("NA")
+    config.null_values.append("NA")
     assert "NA" in get_config().null_values
 
     # mutate nested dict
-    cfg.date_formats["%d-%b-%Y"] = DataType.DATE
+    config.date_formats["%d-%b-%Y"] = DataType.DATE
     assert get_config().date_formats["%d-%b-%Y"] is DataType.DATE
 
     # Fresh defaults remain baseline
     fresh = Config()
     assert "NA" not in fresh.null_values
     assert "%d-%b-%Y" not in fresh.date_formats
+
+
+# Test Config Injection
+def test_injection_applies_immediately_to_session_and_to_new_Config():
+    reset_default_config()
+    assert get_config().max_table_name_length == 63  # sanity check baseline
+
+    inject_config_variables(
+        {
+            "max_table_name_length": 30,
+            "test_variable": True,  # nonsense key should still attach
+        }
+    )
+
+    # Applies immediately to the existing session_config
+    config = get_config()
+    assert config.max_table_name_length == 30
+    assert config.test_variable is True
+
+    # New Config() also picks it up (via __init__)
+    fresh = Config()
+    assert fresh.max_table_name_length == 30
+    assert fresh.test_variable is True
+
+
+def test_reset_default_config_keeps_injection():
+    inject_config_variables({"max_table_name_length": 30})
+    reset_default_config()
+
+    assert get_config().max_table_name_length == 30
+    assert Config().max_table_name_length == 30
+
+
+def test_with_Config_context_applies_injection_even_if_instance_created_before_injection():
+    config = Config()
+    assert config.max_table_name_length == 63  # created before injection
+
+    inject_config_variables({"max_table_name_length": 30})
+
+    # __enter__ should apply injection to *this instance*
+    with config as c:
+        assert c.max_table_name_length == 30
+        assert get_config().max_table_name_length == 30  # global now points to same
+
+    # __exit__ calls reset_default_config(), which should still pick up injection
+    assert get_config().max_table_name_length == 30
+
+
+def test_importing_valediction_after_injection_does_not_clear_injection():
+    inject_config_variables({"max_table_name_length": 30})
+
+    # This is the scenario: Cynric imported & injected, later "import valediction"
+    importlib.import_module("valediction")
+
+    assert get_config().max_table_name_length == 30
+    assert Config().max_table_name_length == 30
 
 
 if __name__ == "__main__":
