@@ -1,6 +1,6 @@
 ## v1.2.0 (2025-12-14)
 
-### Feat
+### Fix
 
 - **integrity**: added type checking to inject_config_variables() function
 - **integrity**: implemented config variable injection for external packages like Cynric and associated tests
