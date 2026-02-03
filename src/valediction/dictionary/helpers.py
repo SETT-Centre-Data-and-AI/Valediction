@@ -106,7 +106,7 @@ def _check_primary_key(primary_key: int | None, data_type: DataType) -> list[str
     ):
         errors.append(
             f"invalid data type '{data_type.value}' for primary key column; "
-            "primary keys must be Text, Integer, Date, or Datetime"
+            "primary keys must be Text, Integer, Date, or Timestamp"
         )
 
     return errors

@@ -39,6 +39,13 @@ def create_dataset_imported() -> Dataset:
     return dataset
 
 
+def _expand_ranges(ranges: list[Range]) -> set[int]:
+    rows: set[int] = set()
+    for r in ranges:
+        rows.update(range(r.start, r.end + 1))
+    return rows
+
+
 # Tests
 def test_validation():
     # Check simple validation on Path
@@ -230,7 +237,7 @@ def test_validation_raises_pk_whitespace(chunk_size):
 
 
 @pytest.mark.parametrize(
-    "data_type", [DataType.DATE, DataType.DATETIME, DataType.INTEGER, DataType.FLOAT]
+    "data_type", [DataType.DATE, DataType.TIMESTAMP, DataType.INTEGER, DataType.FLOAT]
 )
 def test_raises_mismatch_text_to_alternate(chunk_size, data_type: DataType):
     dataset = create_dataset_imported()
@@ -414,6 +421,106 @@ def test_passes_without_forbidden_characters(chunk_size):
         if issue.type == IssueType.FORBIDDEN_CHARACTER
     ]
     assert not issues
+
+
+def test_raises_integer_out_of_range_no_overlap(chunk_size):
+    dataset = create_dataset_imported()
+
+    # Force strict INT4 behaviour
+    config = get_config()
+    config.allow_bigint = False
+
+    # Pick a stable demo column and force it to INTEGER in the dictionary
+    TABLE = "VITALS"
+    COLUMN = "RESULT"
+
+    item = dataset[TABLE]
+    table_dictionary = item.table_dictionary
+    col = table_dictionary.get_column(COLUMN)
+    col.data_type = DataType.INTEGER
+    col.length = None
+
+    df = item.data
+    n = len(df)
+    df[COLUMN] = np.arange(n, dtype="int64").astype("object")
+
+    # Inject known offenders (and one known good boundary)
+    df.loc[0, COLUMN] = "2147483648"  # out of range (too big)
+    df.loc[1, COLUMN] = "not_an_int"  # type mismatch
+    df.loc[2, COLUMN] = "2147483647"  # ok (max int4)
+    df.loc[3, COLUMN] = "-2147483649"  # out of range (too small)
+    df.loc[4, COLUMN] = "3.14"  # type mismatch
+
+    with pytest.raises(DataIntegrityError):
+        dataset.validate(chunk_size=chunk_size)
+        dataset.check()
+
+    # Pull issues for this specific table/column
+    type_mismatch_issues = [
+        issue
+        for issue in item.validator.issues
+        if issue.type == IssueType.TYPE_MISMATCH
+        and issue.table == TABLE
+        and issue.column == COLUMN
+    ]
+    out_of_range_issues = [
+        issue
+        for issue in item.validator.issues
+        if issue.type == IssueType.INTEGER_OUT_OF_RANGE
+        and issue.table == TABLE
+        and issue.column == COLUMN
+    ]
+
+    assert type_mismatch_issues, "Expected TYPE_MISMATCH issue for integer column"
+    assert out_of_range_issues, "Expected INTEGER_OUT_OF_RANGE issue for integer column"
+
+    # Exact ranges we injected (ensure stability + no accidental spread)
+    assert type_mismatch_issues[0].ranges == [Range(1, 1), Range(4, 4)]
+    assert out_of_range_issues[0].ranges == [Range(0, 0), Range(3, 3)]
+
+    # Ensure they don't overlap at the row level
+    tm_rows = _expand_ranges(type_mismatch_issues[0].ranges)
+    oor_rows = _expand_ranges(out_of_range_issues[0].ranges)
+    assert tm_rows.isdisjoint(oor_rows)
+
+
+def test_passes_integer_out_of_range_when_allow_bigint_true(chunk_size):
+    dataset = create_dataset_imported()
+
+    # Ensure BIGINT is allowed
+    config = get_config()
+    config.allow_bigint = True
+
+    TABLE = "VITALS"
+    COLUMN = "RESULT"
+
+    item = dataset[TABLE]
+    table_dictionary = item.table_dictionary
+    col = table_dictionary.get_column(COLUMN)
+    col.data_type = DataType.INTEGER
+    col.length = None
+
+    df = item.data
+    n = len(df)
+    df[COLUMN] = np.arange(n, dtype="int64").astype("object")
+
+    # BIGINTs
+    df.loc[0, COLUMN] = "2147483648"
+    df.loc[1, COLUMN] = "-2147483649"
+
+    # Should not raise
+    dataset.validate(chunk_size=chunk_size)
+    dataset.check()
+
+    # Expect no issues
+    out_of_range_issues = [
+        issue
+        for issue in item.validator.issues
+        if issue.type == IssueType.INTEGER_OUT_OF_RANGE
+        and issue.table == TABLE
+        and issue.column == COLUMN
+    ]
+    assert not out_of_range_issues
 
 
 def test_validate_import(chunk_size):

@@ -257,7 +257,7 @@ class Generator:
             table.add_column(col)
 
     def _set_datetime_format(self, column_state: ColumnState, column: Column) -> None:
-        if column.data_type in (DataType.DATE, DataType.DATETIME):
+        if column.data_type in (DataType.DATE, DataType.TIMESTAMP):
             datetime_format = getattr(column_state, "cached_datetime_format", None)
             if datetime_format and hasattr(column, "datetime_format"):
                 column.datetime_format = datetime_format

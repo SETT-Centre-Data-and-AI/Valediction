@@ -77,20 +77,21 @@ class Config:
             "%d-%m-%Y": DataType.DATE,
             "%m/%d/%Y": DataType.DATE,
             "%m-%d-%Y": DataType.DATE,
-            "%Y-%m-%d %H:%M:%S": DataType.DATETIME,
-            "%Y-%m-%d %H:%M": DataType.DATETIME,
-            "%d/%m/%Y %H:%M:%S": DataType.DATETIME,
-            "%d/%m/%Y %H:%M": DataType.DATETIME,
-            "%m/%d/%Y %H:%M:%S": DataType.DATETIME,
-            "%Y-%m-%dT%H:%M:%S": DataType.DATETIME,
-            "%Y-%m-%dT%H:%M:%S.%f": DataType.DATETIME,
-            "%Y-%m-%dT%H:%M:%S%z": DataType.DATETIME,
-            "%Y-%m-%dT%H:%M:%S.%f%z": DataType.DATETIME,
-            "%Y-%m-%dT%H:%M:%SZ": DataType.DATETIME,
-            "%Y-%m-%dT%H:%M:%S.%fZ": DataType.DATETIME,
+            "%Y-%m-%d %H:%M:%S": DataType.TIMESTAMP,
+            "%Y-%m-%d %H:%M": DataType.TIMESTAMP,
+            "%d/%m/%Y %H:%M:%S": DataType.TIMESTAMP,
+            "%d/%m/%Y %H:%M": DataType.TIMESTAMP,
+            "%m/%d/%Y %H:%M:%S": DataType.TIMESTAMP,
+            "%Y-%m-%dT%H:%M:%S": DataType.TIMESTAMP,
+            "%Y-%m-%dT%H:%M:%S.%f": DataType.TIMESTAMP,
+            "%Y-%m-%dT%H:%M:%S%z": DataType.TIMESTAMP,
+            "%Y-%m-%dT%H:%M:%S.%f%z": DataType.TIMESTAMP,
+            "%Y-%m-%dT%H:%M:%SZ": DataType.TIMESTAMP,
+            "%Y-%m-%dT%H:%M:%S.%fZ": DataType.TIMESTAMP,
         }
         self.enforce_no_null_columns: bool = True
         self.enforce_primary_keys: bool = True
+        self.allow_bigint: bool = True
         _apply_external_injections(self)
 
     def __repr__(self):
@@ -110,6 +111,7 @@ class Config:
             f" - default_null_values={self.null_values}\n"
             f" - forbidden_characters={self.forbidden_characters}\n"
             f" - date_formats=[{date_list}\n  ]\n"
+            f" - allow_bigint={self.allow_bigint}\n"
             ")"
         )
 

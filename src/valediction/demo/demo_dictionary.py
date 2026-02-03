@@ -103,7 +103,7 @@ def demo_dictionary() -> Dictionary:
                 foreign_key="DEMOGRAPHICS.PATIENT_HASH",
             ),
             Column(
-                name="OBSERVATION_TIME", order=2, data_type="datetime", primary_key=2
+                name="OBSERVATION_TIME", order=2, data_type="timestamp", primary_key=2
             ),
             Column(
                 name="OBSERVATION_TYPE",

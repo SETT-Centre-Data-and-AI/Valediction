@@ -10,7 +10,7 @@ EXPECTED_DTYPES = {
     DataType.INTEGER: "Int64",
     DataType.FLOAT: "Float64",
     DataType.DATE: "datetime64[ns]",
-    DataType.DATETIME: "datetime64[ns]",
+    DataType.TIMESTAMP: "datetime64[ns]",
 }
 
 

@@ -14,6 +14,7 @@ from valediction.data_types.data_types import DataType
 from valediction.datasets.datasets_helpers import DataLike, DatasetItemLike
 from valediction.dictionary.model import Table
 from valediction.exceptions import DataDictionaryImportError, DataIntegrityError
+from valediction.integrity import get_config
 from valediction.io.csv_readers import (
     CsvReadConfig,
     FrameChunk,
@@ -29,6 +30,7 @@ from valediction.validation.helpers import (
     invalid_mask_datetime,
     invalid_mask_float,
     invalid_mask_integer,
+    invalid_mask_integer_out_of_range,
     invalid_mask_text_forbidden_characters,
     invalid_mask_text_too_long,
     mask_to_ranges,
@@ -151,7 +153,7 @@ class Validator:
             datetime_format = column.datetime_format
             data_type = column.data_type
 
-            if data_type in (DataType.DATE, DataType.DATETIME):
+            if data_type in (DataType.DATE, DataType.TIMESTAMP):
                 self._dt_format_cache[name] = datetime_format
 
                 if not datetime_format:
@@ -298,12 +300,7 @@ class Validator:
         if missing_keys:
             for name in dict_names:
                 if _normalise(name) in missing_keys:
-                    self.issues.add(
-                        issue_type=IssueType.MISSING_COLUMN,
-                        table=self.table_name,
-                        column=name,
-                        parent=self.dataset_item,
-                    )
+                    self._save_issues(IssueType.MISSING_COLUMN, name)
 
         self.__complete_step()
 
@@ -320,12 +317,7 @@ class Validator:
         if extra_keys:
             for col in df_cols:
                 if _normalise(col) in extra_keys:
-                    self.issues.add(
-                        issue_type=IssueType.EXTRA_COLUMN,
-                        table=self.table_name,
-                        column=col,  # report the actual df label
-                        parent=self.dataset_item,
-                    )
+                    self._save_issues(IssueType.EXTRA_COLUMN, col)
 
         self.__complete_step()
 
@@ -363,13 +355,7 @@ class Validator:
             pk_cols_text_df = self._resolve_df_cols(df, pk_cols_text)
             space_mask = pk_contains_whitespace_mask(df[pk_cols_text_df])
             if space_mask.any():
-                self.issues.add(
-                    issue_type=IssueType.PK_WHITESPACE,
-                    table=self.table_name,
-                    column=None,
-                    ranges=mask_to_ranges(space_mask, start_row),
-                    parent=self.dataset_item,
-                )
+                self._save_issues(IssueType.PK_WHITESPACE, None, space_mask, start_row)
         self.__complete_step()
 
     def _check_primary_key_integrity(self, df, start_row: int) -> None:
@@ -391,13 +377,7 @@ class Validator:
         pk_hashes_non_null = pk_hashes[non_null]
 
         if null.any():
-            self.issues.add(
-                IssueType.PK_NULL,
-                table=self.table_name,
-                column=None,
-                ranges=mask_to_ranges(null, start_row),
-                parent=self.dataset_item,
-            )
+            self._save_issues(IssueType.PK_NULL, None, null, start_row)
         self.__complete_step()
 
         # 2) In-chunk collisions
@@ -427,22 +407,14 @@ class Validator:
 
         # 7) Emit in-chunk collisions Issues
         if in_chunk_collision.any():
-            self.issues.add(
-                IssueType.PK_COLLISION,
-                table=self.table_name,
-                column=None,
-                ranges=mask_to_ranges(in_chunk_collision, start_row),
-                parent=self.dataset_item,
+            self._save_issues(
+                IssueType.PK_COLLISION, None, in_chunk_collision, start_row
             )
 
         # 7) Emit cross-chunk collisions Issues
         if cross_chunk_collision.any():
-            self.issues.add(
-                IssueType.PK_COLLISION,
-                table=self.table_name,
-                column=None,
-                ranges=mask_to_ranges(cross_chunk_collision, start_row),
-                parent=self.dataset_item,
+            self._save_issues(
+                IssueType.PK_COLLISION, None, cross_chunk_collision, start_row
             )
 
             # Add the original PK row as a collision
@@ -453,7 +425,7 @@ class Validator:
                         IssueType.PK_COLLISION,
                         table=self.table_name,
                         column=None,
-                        ranges=[Range(first_row, first_row)],
+                        ranges=[Range(first_row, first_row)],  # add directly
                         parent=self.dataset_item,
                     )
                     self.tracker_pk_reported_first.add(int(h))
@@ -515,11 +487,50 @@ class Validator:
 
         self.__complete_step()
 
+    def _save_issues(
+        self,
+        issue_type: IssueType,
+        column: str | None = None,
+        invalid: Series | None = None,
+        start_row: int | None = None,
+    ) -> None:
+        if invalid is not None and start_row is None:
+            raise ValueError(
+                "'start_row' must be provided when 'invalid' mask is provided"
+            )
+
+        ranges = None if invalid is None else mask_to_ranges(invalid, start_row)
+        self.issues.add(
+            issue_type=issue_type,
+            table=self.table_name,
+            column=column,
+            ranges=ranges,
+            parent=self.dataset_item,
+        )
+
+    def _check_column_types_integer(
+        self, col: str, series: Series, start_row: int, allow_bigint: bool
+    ) -> None:
+        invalid = invalid_mask_integer(series)
+        if invalid.any():
+            self._save_issues(IssueType.TYPE_MISMATCH, col, invalid, start_row)
+
+        # Check for out of range integers
+        if allow_bigint is False:
+            out_of_range = invalid_mask_integer_out_of_range(
+                series, invalid_integer_mask=invalid
+            )
+            if out_of_range.any():
+                self._save_issues(
+                    IssueType.INTEGER_OUT_OF_RANGE, col, out_of_range, start_row
+                )
+
     def _check_column_types(self, df: DataFrame, start_row: int) -> None:
         self.__begin_step(step="Checking column types")
         present = [
             col for col in df.columns if _normalise(str(col)) in self._column_names
         ]
+        config = get_config()
         for col in present:
             dtype = self._find_data_type(col)
             if dtype == DataType.TEXT:
@@ -527,26 +538,24 @@ class Validator:
 
             series = df[col]
             if dtype == DataType.INTEGER:
-                invalid = invalid_mask_integer(series)
-            elif dtype == DataType.FLOAT:
+                self._check_column_types_integer(
+                    col, series, start_row, config.allow_bigint
+                )
+                continue
+
+            if dtype == DataType.FLOAT:
                 invalid = invalid_mask_float(series)
             elif dtype == DataType.DATE:
                 fmt = self._dt_format_cache.get(col) or self._find_datetime_format(col)
                 invalid = invalid_mask_date(series, fmt)
-            elif dtype == DataType.DATETIME:
+            elif dtype == DataType.TIMESTAMP:
                 fmt = self._dt_format_cache.get(col) or self._find_datetime_format(col)
                 invalid = invalid_mask_datetime(series, fmt)
             else:
                 continue
 
             if invalid.any():
-                self.issues.add(
-                    IssueType.TYPE_MISMATCH,
-                    table=self.table_name,
-                    column=col,
-                    ranges=mask_to_ranges(invalid, start_row),
-                    parent=self.dataset_item,
-                )
+                self._save_issues(IssueType.TYPE_MISMATCH, col, invalid, start_row)
         self.__complete_step()
 
     def _check_text_lengths(self, df: DataFrame, start_row: int) -> None:
@@ -560,13 +569,7 @@ class Validator:
             max_len = self._find_max_length(col)
             invalid = invalid_mask_text_too_long(df[col], max_len)
             if invalid.any():
-                self.issues.add(
-                    IssueType.TEXT_TOO_LONG,
-                    table=self.table_name,
-                    column=col,
-                    ranges=mask_to_ranges(invalid, start_row),
-                    parent=self.dataset_item,
-                )
+                self._save_issues(IssueType.TEXT_TOO_LONG, col, invalid, start_row)
         self.__complete_step()
 
     def _check_text_forbidden_chars(self, df: DataFrame, start_row: int) -> None:
@@ -579,13 +582,7 @@ class Validator:
                 continue
             mask = invalid_mask_text_forbidden_characters(df[col])
             if mask.any():
-                self.issues.add(
-                    IssueType.FORBIDDEN_CHARACTER,
-                    table=self.table_name,
-                    column=col,
-                    ranges=mask_to_ranges(mask, start_row),
-                    parent=self.dataset_item,
-                )
+                self._save_issues(IssueType.FORBIDDEN_CHARACTER, col, mask, start_row)
         self.__complete_step()
 
     # Validation: Final Helpers
@@ -593,12 +590,7 @@ class Validator:
         self.__begin_step(step="Checking for fully null columns")
         for column, seen in self.tracker_seen_non_nulls.items():
             if not seen:
-                self.issues.add(
-                    issue_type=IssueType.FULLY_NULL_COLUMN,
-                    table=self.table_name,
-                    column=column,
-                    parent=self.dataset_item,
-                )
+                self._save_issues(IssueType.FULLY_NULL_COLUMN, column)
         self.__complete_step()
 
     # Progress Helpers
