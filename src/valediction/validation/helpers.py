@@ -241,7 +241,7 @@ def invalid_mask_datetime(column: Series, fmt: str | None) -> Series:
         ok = parsed.notna()
         return notnull & (~ok)
 
-    allowed = _allowed_formats_for(DataType.DATETIME)
+    allowed = _allowed_formats_for(DataType.TIMESTAMP)
     ok_any = _parse_ok_any(column, allowed)
     return notnull & (~ok_any)
 
@@ -300,7 +300,7 @@ def apply_data_types(df: DataFrame, table_dictionary: Table) -> DataFrame:
             )
             df[col] = dtv.dt.normalize()  # midnight
 
-        elif data_type == DataType.DATETIME:
+        elif data_type == DataType.TIMESTAMP:
             df[col] = to_datetime(
                 df[col], format=datetime_format, errors="raise", utc=False
             )
@@ -310,3 +310,62 @@ def apply_data_types(df: DataFrame, table_dictionary: Table) -> DataFrame:
             df[col] = df[col].astype("string")
 
     return df
+
+
+# Bigint Checks
+_PG_INT4_MIN_STR_ABS = "2147483648"  # abs(-2147483648)
+_PG_INT4_MAX_STR_ABS = "2147483647"
+_PG_INT4_MIN_LEN = len(_PG_INT4_MIN_STR_ABS)
+_PG_INT4_MAX_LEN = len(_PG_INT4_MAX_STR_ABS)
+
+
+def invalid_mask_integer_out_of_range(
+    series: Series,
+    invalid_integer_mask: Series | None = None,
+) -> Series:
+    """
+    Returns a boolean mask for values that:
+      - are integer-like under Valediction's integer rules, AND
+      - fall outside PostgreSQL INTEGER (int4) range.
+    """
+
+    # Start with all-False mask
+    out = series.isna() & False
+
+    # Use caller-provided invalid mask to avoid recomputing if available
+    if invalid_integer_mask is None:
+        from valediction.validation.helpers import invalid_mask_integer  # avoid cycles
+
+        invalid_integer_mask = invalid_mask_integer(series)
+
+    # We only check range for values that already pass integer validation
+    valid = (~invalid_integer_mask) & series.notna()
+    if not valid.any():
+        return out
+
+    # String-normalise for safe compare (works for object/int dtype)
+    s = series[valid].astype("string", copy=False).str.strip()
+
+    # Sign handling
+    neg = s.str.startswith("-")
+    abs_str = s.str.lstrip("+-")
+
+    # Lengths
+    abs_len = abs_str.str.len()
+
+    # Positive overflow:
+    #   abs_len > 10 OR (abs_len == 10 AND abs_str > 2147483647)
+    pos = ~neg
+    pos_over = (abs_len > _PG_INT4_MAX_LEN) | (
+        (abs_len == _PG_INT4_MAX_LEN) & (abs_str > _PG_INT4_MAX_STR_ABS)
+    )
+
+    # Negative overflow (too small):
+    #   abs_len > 10 OR (abs_len == 10 AND abs_str > 2147483648)
+    neg_over = (abs_len > _PG_INT4_MIN_LEN) | (
+        (abs_len == _PG_INT4_MIN_LEN) & (abs_str > _PG_INT4_MIN_STR_ABS)
+    )
+
+    # Combine back into the full index
+    out.loc[valid] = (pos & pos_over) | (neg & neg_over)
+    return out

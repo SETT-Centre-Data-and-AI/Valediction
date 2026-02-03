@@ -26,6 +26,7 @@ class IssueType(Enum):
     TYPE_MISMATCH = "TypeMismatch"
     TEXT_TOO_LONG = "TextTooLong"
     FORBIDDEN_CHARACTER = "ForbiddenCharacter"
+    INTEGER_OUT_OF_RANGE = "IntegerOutOfRange"
 
 
 # Settings

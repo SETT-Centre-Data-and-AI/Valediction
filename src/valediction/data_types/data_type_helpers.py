@@ -62,14 +62,14 @@ def infer_datetime_format(
 
 
 def get_date_type(datetime_format: str) -> DataType | None:
-    """Identifies if a datetime format string corresponds to a Date or Datetime data
+    """Identifies if a datetime format string corresponds to a Date or Timestamp data
     type.
 
     Args:
         datetime_format (str): datetime format string
 
     Returns:
-        DataType | None: DataType of Date, Datetime, or None if not found.
+        DataType | None: DataType of Date, Timestamp, or None if not found.
     """
     config = get_config()
     return config.date_formats.get(datetime_format)

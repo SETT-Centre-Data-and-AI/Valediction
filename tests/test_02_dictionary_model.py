@@ -80,7 +80,7 @@ def test_invalid_pk_type_raises():
         Column(name="FLOAT_PK", order=1, data_type="float", primary_key=1)
 
 
-@pytest.mark.parametrize("dtype", ["text", "integer", "date", "datetime"])
+@pytest.mark.parametrize("dtype", ["text", "integer", "date", "timestamp"])
 def test_valid_pk_types_pass(dtype):
     # Minimal valid definition for PK-eligible types
     kwargs = {"length": 10} if dtype == "text" else {}

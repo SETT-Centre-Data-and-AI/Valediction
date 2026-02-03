@@ -18,7 +18,7 @@ def get_mixed_dtype_dataset() -> Dataset:
             "INT": [1, 2, 3],
             "STR": ["a", "b", "c"],
             "DATE": ["2022-01-01", "2022-02-01", "2022-03-01"],
-            "DATETIME": [
+            "TIMESTAMP": [
                 "2022-01-01 00:00:00",
                 "2022-02-01 00:00:00",
                 "2022-03-01 00:00:00",
@@ -36,7 +36,7 @@ def get_mixed_dtype_dataset() -> Dataset:
                     Column(name="INT", order=1, data_type="int", primary_key=1),
                     Column(name="STR", order=2, data_type="str", length=1),
                     Column(name="DATE", order=3, data_type="date"),
-                    Column(name="DATETIME", order=4, data_type="datetime"),
+                    Column(name="TIMESTAMP", order=4, data_type="timestamp"),
                     Column(name="FLOAT", order=5, data_type="float"),
                 ],
             )

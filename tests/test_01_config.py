@@ -78,7 +78,7 @@ def test_date_formats_have_expected_entries_and_types():
 
     # Spot-check types
     assert df["%Y-%m-%d"] is DataType.DATE
-    assert df["%Y-%m-%d %H:%M:%S"] is DataType.DATETIME
+    assert df["%Y-%m-%d %H:%M:%S"] is DataType.TIMESTAMP
 
 
 def test_mutating_nested_structures_affects_global_and_is_detected_against_fresh():

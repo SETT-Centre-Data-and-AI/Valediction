@@ -23,7 +23,7 @@ Valediction runs a number of checks to enforce data integrity. Some of these are
  - **Invalid column/table name patterns**: regex for invalid characters in names (default = numbers/characters/underscores only)
  - **Null values**: case-inensitive values to interpret as nulls during validation (default = "", "null", "none")
  - **Forbidden characters**: characters disallowed in values (default = no characters forbidden)
- - **Date Formats**: acceptable date formats, and their classification as DATE or DATETIME
+ - **Date Formats**: acceptable date formats, and their classification as DATE or TIMESTAMP
 
 These can be accessed and amended to set new global defaults - for example to allow longer table/column names:
 
@@ -210,7 +210,7 @@ Data dictionaries can be manually created in Python, allowing a user to set tabl
  - name
  - description
  - order (in table)
- - data_type (text, integer, float, date, or datetime)
+ - data_type (text, integer, float, date, or timestamp)
  - length (if text)
  - primary_key (numeric order within key)
  - enumerations (as a dict of code: value pairs)

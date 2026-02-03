@@ -364,7 +364,7 @@ class ExcelDataDictionary:
         enumeration_flag_col_header = header_map.get("enumerations")
         primary_key_col_header = header_map.get("primary_key")
         foreign_key_col_header = header_map.get("foreign_key_target")
-        description_col_header = header_map.get("description")
+        description_col_header = header_map.get("column_description")
         return (
             table_col_header,
             column_col_header,
