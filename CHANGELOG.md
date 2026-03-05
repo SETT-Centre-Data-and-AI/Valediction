@@ -1,6 +1,10 @@
 ## v1.6.0 (2026-03-05)
 
-### Feat
+### Fix
+
+- **bigint_checking**: wired in `allow_bigint` optional checking
+
+### Refactor
 
 - **convenience**: added convenient create_dataset function
 - **validation**: added pk_col_max_length support with default = off
