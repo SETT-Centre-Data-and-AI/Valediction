@@ -6,6 +6,28 @@ from valediction.datasets.datasets import Dataset
 from valediction.dictionary.model import Dictionary
 
 
+def create_dataset(
+    data: str | Path | dict[str, DataFrame], dictionary: Dictionary | Path | str = ""
+) -> Dataset:
+    """Build a Dataset from a path (file/dir of files) or dictionary of {name:
+    DataFrame}.
+
+    Args:
+        dataset (str | Path | dict[str, DataFrame]): Path to file or directory of files,
+            or dictionary of existing DataFrame objects {name: DataFrame}.
+        dictionary (Dictionary | Path | str, optional): Dictionary object or filepath
+            to Valediction dictionary to attach. Defaults to "".
+
+    Returns:
+        Dataset: Valediction Dataset object
+    """
+    dataset = Dataset.create_from(dataset=data)
+    if dictionary != "":
+        dataset.import_dictionary(dictionary)
+
+    return dataset
+
+
 def validate(
     dataset: str | Path | dict[str, DataFrame],
     dictionary: Dictionary | str | Path,

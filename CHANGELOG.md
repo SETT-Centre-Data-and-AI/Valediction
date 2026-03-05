@@ -1,6 +1,18 @@
-## v1.5.0 (2026-02-03)
+## v1.6.0 (2026-03-05)
 
 ### Fix
+
+- **bigint_checking**: wired in `allow_bigint` optional checking
+
+### Refactor
+
+- **convenience**: added convenient create_dataset function
+- **validation**: added pk_col_max_length support with default = off
+- **demo**: added create_demo_dataset function
+
+## v1.5.0 (2026-02-03)
+
+### Feat
 
 - **bigint_checking**: wired in `allow_bigint` optional checking
 
@@ -27,7 +39,7 @@
 
 ## v1.2.0 (2025-12-14)
 
-### Fix
+### Feat
 
 - **integrity**: added type checking to inject_config_variables() function
 - **integrity**: implemented config variable injection for external packages like Cynric and associated tests

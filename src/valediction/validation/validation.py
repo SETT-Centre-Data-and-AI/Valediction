@@ -40,7 +40,7 @@ from valediction.validation.issues import Issues, IssueType, Range
 
 IMPORTING_DATA = "Importing data"
 SINGLE_STEPS: int = 3  # tweak if adding/amending step tracking
-CHUNK_STEPS: int = 12  # tweak if adding/amending step tracking
+CHUNK_STEPS: int = 13  # tweak if adding/amending step tracking
 
 
 class Validator:
@@ -205,6 +205,7 @@ class Validator:
             # Structural Checks
             self._check_for_column_nulls(df)
             self._check_primary_key_whitespace(df, start_row=start)
+            self._check_primary_key_text_lengths(df, start_row=start)
             self._check_primary_key_integrity(df, start_row=start)
 
             # Data Type Checks
@@ -356,6 +357,45 @@ class Validator:
             space_mask = pk_contains_whitespace_mask(df[pk_cols_text_df])
             if space_mask.any():
                 self._save_issues(IssueType.PK_WHITESPACE, None, space_mask, start_row)
+        self.__complete_step()
+
+    def _check_primary_key_text_lengths(self, df: DataFrame, start_row: int) -> None:
+        self.__begin_step(step="Checking primary key text lengths")
+        pk_cols = self.table_dictionary.get_primary_keys()
+        if not pk_cols:
+            self.__complete_step()
+            return
+
+        config = get_config()
+        limit = int(getattr(config, "pk_col_max_length", 0) or 0)
+        if limit <= 0:
+            self.__complete_step()
+            return
+
+        pk_keys = {_normalise(p) for p in pk_cols}
+
+        # Only check TEXT PK cols where dictionary length is unset or exceeds the cap
+        pk_text_cols = []
+        for column in self.table_dictionary:
+            if _normalise(column.name) not in pk_keys:
+                continue
+            if column.data_type is not DataType.TEXT:
+                continue
+            dict_len = column.length
+            if dict_len is None or dict_len > limit:
+                pk_text_cols.append(column.name)
+
+        if pk_text_cols:
+            for dict_col in pk_text_cols:
+                df_col = self._resolve_df_col(df, dict_col)
+                if df_col is None:
+                    continue
+                invalid = invalid_mask_text_too_long(df[df_col], limit)
+                if invalid.any():
+                    self._save_issues(
+                        IssueType.TEXT_TOO_LONG, dict_col, invalid, start_row
+                    )
+
         self.__complete_step()
 
     def _check_primary_key_integrity(self, df, start_row: int) -> None:
