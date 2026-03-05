@@ -92,6 +92,7 @@ class Config:
         self.enforce_no_null_columns: bool = True
         self.enforce_primary_keys: bool = True
         self.allow_bigint: bool = True
+        self.pk_col_max_length: int = 0
         _apply_external_injections(self)
 
     def __repr__(self):

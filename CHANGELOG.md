@@ -1,3 +1,11 @@
+## v1.6.0 (2026-03-05)
+
+### Feat
+
+- **convenience**: added convenient create_dataset function
+- **validation**: added pk_col_max_length support with default = off
+- **demo**: added create_demo_dataset function
+
 ## v1.5.0 (2026-02-03)
 
 ### Feat
