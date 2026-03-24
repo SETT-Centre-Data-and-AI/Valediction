@@ -403,6 +403,61 @@ class Validator:
         if not pk_cols:
             return
 
+        one_chunk_validation = (
+            start_row == 0
+            and not self.tracker_pk_hashes
+            and (
+                self.data_is_dataframe
+                or self.chunk_size is None
+                or (isinstance(self.chunk_size, int) and self.chunk_size <= 0)
+            )
+        )
+
+        if one_chunk_validation:
+            self._check_primary_key_integrity_no_chunks(
+                df=df, start_row=start_row, pk_cols=pk_cols
+            )
+            return
+
+        self._check_primary_key_integrity_chunks(
+            df=df, start_row=start_row, pk_cols=pk_cols
+        )
+
+    def _check_primary_key_integrity_no_chunks(
+        self, df: DataFrame, start_row: int, pk_cols: list[str]
+    ) -> None:
+        pk_cols_df = self._resolve_df_cols(df, pk_cols)
+        pk_frame = df[pk_cols_df]
+
+        # Keep progress label for consistency with chunked path
+        self.__begin_step(step="Creating primary key hashes")
+        self.__complete_step()
+
+        self.__begin_step(step="Checking for primary key nulls")
+        null = pk_frame.isna().any(axis=1)
+        non_null = ~null
+        if null.any():
+            self._save_issues(IssueType.PK_NULL, None, null, start_row)
+        self.__complete_step()
+
+        self.__begin_step(step="Checking for primary key collision")
+        in_chunk_collision = non_null.copy()
+        if non_null.any():
+            in_chunk_local = pk_frame.loc[non_null].duplicated(keep=False)
+            in_chunk_collision.loc[non_null] = in_chunk_local
+        if in_chunk_collision.any():
+            self._save_issues(
+                IssueType.PK_COLLISION, None, in_chunk_collision, start_row
+            )
+        self.__complete_step()
+
+        # Keep progress label for consistency with chunked path
+        self.__begin_step(step="Caching primary keys")
+        self.__complete_step()
+
+    def _check_primary_key_integrity_chunks(
+        self, df: DataFrame, start_row: int, pk_cols: list[str]
+    ) -> None:
         # Create primary key hashes
         self.__begin_step(step="Creating primary key hashes")
         pk_cols_df = self._resolve_df_cols(df, pk_cols)

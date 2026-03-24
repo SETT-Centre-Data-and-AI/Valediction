@@ -1,10 +1,4 @@
-name: Sync from Public Repo
-
-# ===================================================================== #
-# Sync from Public Repo (manual)
-# From PRIVATE repo, pull a chosen branch from PUBLIC into
-# PRIVATE_REPO_INCOMING_BRANCH and open a PR to PRIVATE_REPO_MAIN_BRANCH.
-# ===================================================================== #
+name: Sync from Public
 
 on:
   workflow_dispatch:
@@ -14,139 +8,20 @@ on:
         type: string
         required: true
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
-  env-config:
+  load-identity:
+    name: Load Identity
     uses: ./.github/workflows/config.yaml
 
   sync-from-public:
-    needs: env-config
-
-    if: github.repository == needs.env-config.outputs.PRIVATE_REPO
-
-    runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        shell: bash
-
-    env:
-      # From shared config
-      PRIVATE_REPO: ${{ needs.env-config.outputs.PRIVATE_REPO }}
-      PRIVATE_REPO_MAIN_BRANCH: ${{ needs.env-config.outputs.PRIVATE_REPO_MAIN_BRANCH }}
-      PRIVATE_REPO_INCOMING_BRANCH: ${{ needs.env-config.outputs.PRIVATE_REPO_INCOMING_BRANCH }}
-
-      PUBLIC_REPO: ${{ needs.env-config.outputs.PUBLIC_REPO }}
-      REPO_SYNC_TOKEN: ${{ secrets.REPO_SYNC_TOKEN }}
-
-      PUBLIC_BRANCH: ${{ github.event.inputs.public_branch }}
-
-    steps:
-    - name: Show Sync Context
-      run: |
-        echo "Current repo:            $GITHUB_REPOSITORY"
-        echo "Private repo (expected): $PRIVATE_REPO"
-        echo "Public repo:             $PUBLIC_REPO"
-        echo "Public branch (input):   $PUBLIC_BRANCH"
-        echo "Private incoming branch: $PRIVATE_REPO_INCOMING_BRANCH"
-        echo "Private main branch:     $PRIVATE_REPO_MAIN_BRANCH"
-
-    - name: Check Sync Token
-      run: |
-        if [ -z "${REPO_SYNC_TOKEN}" ]; then
-          echo "ERROR: REPO_SYNC_TOKEN is not set or empty in repo secrets."
-          exit 1
-        else
-          echo "Repo sync token is present (value hidden)."
-        fi
-
-    - name: Checkout Private Main Branch
-      uses: actions/checkout@v4
-      with:
-        ref: ${{ env.PRIVATE_REPO_MAIN_BRANCH }}
-        fetch-depth: 0
-        persist-credentials: false
-
-    - name: Fetch Public Branch
-      env:
-        TOKEN: ${{ env.REPO_SYNC_TOKEN }}
-        PUBLIC_REPO: ${{ env.PUBLIC_REPO }}
-        PUBLIC_BRANCH: ${{ env.PUBLIC_BRANCH }}
-      run: |
-        if [ -z "$PUBLIC_BRANCH" ]; then
-          echo "ERROR: public_branch input is empty."
-          exit 1
-        fi
-
-        echo "Configuring public remote..."
-        # Avoid GITHUB_TOKEN extraheader overriding our PAT
-        git config --unset-all http.https://github.com/.extraheader || true
-
-        git remote remove public 2>/dev/null || true
-        git remote add public https://x-access-token:${TOKEN}@github.com/${PUBLIC_REPO}.git
-
-        echo "Fetching branch '$PUBLIC_BRANCH' from public..."
-        # This will create/update a local branch that mirrors the public branch
-        git fetch public "refs/heads/${PUBLIC_BRANCH}:refs/heads/${PRIVATE_REPO_INCOMING_BRANCH}"
-
-        echo "Local branch '${PRIVATE_REPO_INCOMING_BRANCH}' now matches public '${PUBLIC_BRANCH}'."
-
-    - name: Push to Private as incoming_from_public
-      env:
-        INCOMING_BRANCH: ${{ env.PRIVATE_REPO_INCOMING_BRANCH }}
-        PRIVATE_REPO: ${{ env.PRIVATE_REPO }}
-        TOKEN: ${{ env.REPO_SYNC_TOKEN }}
-      run: |
-        echo "Configuring origin with PAT..."
-        git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
-
-        echo "Pushing '${INCOMING_BRANCH}' to origin..."
-        git push origin "${INCOMING_BRANCH}:refs/heads/${INCOMING_BRANCH}" --force
-
-    - name: Check for Existing PR
-      env:
-        GH_TOKEN: ${{ env.REPO_SYNC_TOKEN }}
-        PRIVATE_REPO: ${{ env.PRIVATE_REPO }}
-        INCOMING_BRANCH: ${{ env.PRIVATE_REPO_INCOMING_BRANCH }}
-        MAIN_BRANCH: ${{ env.PRIVATE_REPO_MAIN_BRANCH }}
-      run: |
-        echo "Checking for existing open PR from ${INCOMING_BRANCH} -> ${MAIN_BRANCH}..."
-
-        existing_pr=$(gh pr list \
-          --repo "$PRIVATE_REPO" \
-          --head "${INCOMING_BRANCH}" \
-          --base "${MAIN_BRANCH}" \
-          --state open \
-          --json number \
-          --jq '.[0].number' || true)
-
-        if [ -n "$existing_pr" ]; then
-          echo "Found existing PR #$existing_pr."
-        else
-          echo "No existing open PR."
-        fi
-
-        echo "EXISTING_PR=$existing_pr" >> "$GITHUB_ENV"
-
-    - name: Create PR if Needed
-      env:
-        GH_TOKEN: ${{ env.REPO_SYNC_TOKEN }}
-        PRIVATE_REPO: ${{ env.PRIVATE_REPO }}
-        INCOMING_BRANCH: ${{ env.PRIVATE_REPO_INCOMING_BRANCH }}
-        MAIN_BRANCH: ${{ env.PRIVATE_REPO_MAIN_BRANCH }}
-        PUBLIC_BRANCH: ${{ env.PUBLIC_BRANCH }}
-      run: |
-        if [ -n "${EXISTING_PR:-}" ]; then
-          echo "PR #$EXISTING_PR already exists. Skipping PR creation."
-          exit 0
-        fi
-
-        title="Sync from public branch '${PUBLIC_BRANCH}'"
-        body="Automated sync of public branch \`${PUBLIC_BRANCH}\` into private \`${MAIN_BRANCH}\`."
-
-        echo "Creating PR on ${PRIVATE_REPO}: ${INCOMING_BRANCH} -> ${MAIN_BRANCH}"
-        gh pr create \
-          --repo "$PRIVATE_REPO" \
-          --head "${INCOMING_BRANCH}" \
-          --base "${MAIN_BRANCH}" \
-          --title "$title" \
-          --body "$body"
+    needs: load-identity
+    uses: SETT-Centre-Data-and-AI/workflows/.github/workflows/sync-from-public.yaml@release
+    with:
+      public_branch: ${{ github.event.inputs.public_branch }}
+      private-repo: ${{ needs.load-identity.outputs.private-repo }}
+      public-repo: ${{ needs.load-identity.outputs.public-repo }}
+    secrets: inherit

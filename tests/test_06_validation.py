@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -194,6 +196,46 @@ def test_validation_raises_pk_collision(chunk_size):
     ]
     assert issues
     assert issues[0].ranges == [Range(0, 1), Range(4, 5)]
+
+
+def test_validation_raises_pk_collision_csv_no_chunk():
+    dataset = create_dataset_imported()
+    df = dataset[0].data.copy()
+    table_dictionary = dataset[0].table_dictionary
+    pk_columns = table_dictionary.get_primary_keys()
+
+    # Copy the 1st row PKs to the 2nd, and the 5th to the 6th
+    df.loc[1, pk_columns] = df.loc[0, pk_columns]
+    df.loc[5, pk_columns] = df.loc[4, pk_columns]
+
+    tmp_dir = Path("tests") / "_tmp"
+    csv_path = tmp_dir / f"{table_dictionary.name}.csv"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        df.to_csv(csv_path, index=False)
+
+        dataset_from_path = Dataset.create_from(csv_path)
+        dataset_from_path.import_dictionary(DEMO_DICTIONARY)
+
+        # Checks
+        with pytest.raises(DataIntegrityError):
+            dataset_from_path.validate(chunk_size=None)
+            dataset_from_path.check()
+
+        issues = [
+            issue
+            for issue in dataset_from_path[0].validator.issues
+            if issue.type == IssueType.PK_COLLISION
+        ]
+        assert issues
+        assert issues[0].ranges == [Range(0, 1), Range(4, 5)]
+    finally:
+        csv_path.unlink(missing_ok=True)
+        try:
+            tmp_dir.rmdir()
+        except OSError:
+            pass
 
 
 def test_validation_raises_pk_whitespace(chunk_size):

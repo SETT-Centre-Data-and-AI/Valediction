@@ -1,3 +1,22 @@
+## v1.7.2 (2026-03-24)
+
+## v1.7.1 (2026-03-23)
+
+### Feat
+
+- **validation**: staging optimisation in new branch + tweaked docs
+
+### Fix
+
+- **config.yaml**: attempt to fix smoke tests
+- **workflow-orchestrator.yaml**: fixed issue in write permissions
+
+## v1.7.0 (2026-03-09)
+
+### Feat
+
+- **validation**: significant optimisation when not chunking by removing the need to hash PKs
+
 ## v1.6.0 (2026-03-05)
 
 ### Feat

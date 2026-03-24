@@ -1,109 +1,86 @@
-name: Environment Config
+name: Repo Config
 
-# =================================================================== #
-# Shared Environment Variable Config
-# sets environment variables and repo settings for use across workflows
-# =================================================================== #
+# ============================================================ #
+# Repository identity and runtime/policy configuration
+# Edit values below to match your repository setup
+# ============================================================ #
 
 on:
   workflow_call:
     outputs:
-
-      # Package
-      PACKAGE_NAME:
-        value: ${{ jobs.export-env.outputs.PACKAGE_NAME }}
-      PACKAGE_SLUG:
-        value: ${{ jobs.export-env.outputs.PACKAGE_SLUG }}
-
-      # Private Repo
-      PRIVATE_REPO:
-        value: ${{ jobs.export-env.outputs.PRIVATE_REPO }}
-      PRIVATE_REPO_MAIN_BRANCH:
-        value: ${{ jobs.export-env.outputs.PRIVATE_REPO_MAIN_BRANCH }}
-      PRIVATE_REPO_RELEASE_BRANCH:
-        value: ${{ jobs.export-env.outputs.PRIVATE_REPO_RELEASE_BRANCH }}
-      PRIVATE_REPO_INCOMING_BRANCH:
-        value: ${{ jobs.export-env.outputs.PRIVATE_REPO_INCOMING_BRANCH }}
-
-      # Public Repo
-      PUBLIC_REPO:
-        value: ${{ jobs.export-env.outputs.PUBLIC_REPO }}
-      PUBLIC_REPO_RELEASE_BRANCH:
-        value: ${{ jobs.export-env.outputs.PUBLIC_REPO_RELEASE_BRANCH }}
-      PUBLIC_REPO_INCOMING_BRANCH:
-        value: ${{ jobs.export-env.outputs.PUBLIC_REPO_INCOMING_BRANCH }}
-
-      # Tokens (derived from secrets, not echoed)
-      REPO_SYNC_TOKEN:
-        value: ${{ jobs.export-env.outputs.REPO_SYNC_TOKEN }}
-      PYPI_TOKEN:
-        value: ${{ jobs.export-env.outputs.PYPI_TOKEN }}
-
-
-
-# =================
-# Manual Config
-# =================
-env:
-  # Package
-  PACKAGE_NAME: valediction
-  PACKAGE_SLUG: valediction
-
-  # Private Repo
-  PRIVATE_REPO: SETT-Centre-Data-and-AI/Valediction_development
-  PRIVATE_REPO_MAIN_BRANCH: main                        # when PR opened, triggers install & smoke test
-  PRIVATE_REPO_RELEASE_BRANCH: release                  # when PR merged, triggers PR to public repo
-  PRIVATE_REPO_INCOMING_BRANCH: incoming_from_public    # mirrors incoming from public
-
-  # Public Repo
-  PUBLIC_REPO: SETT-Centre-Data-and-AI/Valediction
-  PUBLIC_REPO_INCOMING_BRANCH: incoming_from_private    # mirrors incoming from private
-  PUBLIC_REPO_RELEASE_BRANCH: release                   # when PR closed, trigger PyPI publish
-# =================
-# End Manual Config
-# =================
-
+      package-name:
+        value: ${{ jobs.export-identity.outputs.package-name }}
+      package-slug:
+        value: ${{ jobs.export-identity.outputs.package-slug }}
+      private-repo:
+        value: ${{ jobs.export-identity.outputs.private-repo }}
+      public-repo:
+        value: ${{ jobs.export-identity.outputs.public-repo }}
+      build-smoke-python-version:
+        value: ${{ jobs.export-identity.outputs.build-smoke-python-version }}
+      version-check-python-version:
+        value: ${{ jobs.export-identity.outputs.version-check-python-version }}
+      publish-python-version:
+        value: ${{ jobs.export-identity.outputs.publish-python-version }}
+      publish-on-release:
+        value: ${{ jobs.export-identity.outputs.publish-on-release }}
+      sync-to-public:
+        value: ${{ jobs.export-identity.outputs.sync-to-public }}
+      test-matrix-json:
+        value: ${{ jobs.export-identity.outputs.test-matrix-json }}
 
 jobs:
-  export-env:
+  export-identity:
+    name: Export Config
     runs-on: ubuntu-latest
     outputs:
+      package-name: ${{ steps.set.outputs.package-name }}
+      package-slug: ${{ steps.set.outputs.package-slug }}
+      private-repo: ${{ steps.set.outputs.private-repo }}
+      public-repo: ${{ steps.set.outputs.public-repo }}
+      build-smoke-python-version: ${{ steps.set.outputs.build-smoke-python-version }}
+      version-check-python-version: ${{ steps.set.outputs.version-check-python-version }}
+      publish-python-version: ${{ steps.set.outputs.publish-python-version }}
+      publish-on-release: ${{ steps.set.outputs.publish-on-release }}
+      sync-to-public: ${{ steps.set.outputs.sync-to-public }}
+      test-matrix-json: ${{ steps.set.outputs.test-matrix-json }}
 
-      # Package
-      PACKAGE_NAME: ${{ steps.set.outputs.PACKAGE_NAME }}
-      PACKAGE_SLUG: ${{ steps.set.outputs.PACKAGE_SLUG }}
+    # ================================================ #
+    # Edit values below to match your repository setup #
+    # ================================================ #
 
-      # Private Repo
-      PRIVATE_REPO: ${{ steps.set.outputs.PRIVATE_REPO }}
-      PRIVATE_REPO_MAIN_BRANCH: ${{ steps.set.outputs.PRIVATE_REPO_MAIN_BRANCH }}
-      PRIVATE_REPO_RELEASE_BRANCH: ${{ steps.set.outputs.PRIVATE_REPO_RELEASE_BRANCH }}
-      PRIVATE_REPO_INCOMING_BRANCH: ${{ steps.set.outputs.PRIVATE_REPO_INCOMING_BRANCH }}
+    env:
+      # Package identity
+      PACKAGE_NAME: valediction                                       # e.g., your_package
+      PACKAGE_SLUG: valediction                                       # e.g., your-package (URL-safe)
 
-      # Public Repo
-      PUBLIC_REPO: ${{ steps.set.outputs.PUBLIC_REPO }}
-      PUBLIC_REPO_RELEASE_BRANCH: ${{ steps.set.outputs.PUBLIC_REPO_RELEASE_BRANCH }}
-      PUBLIC_REPO_INCOMING_BRANCH: ${{ steps.set.outputs.PUBLIC_REPO_INCOMING_BRANCH }}
+      # Repositories
+      PRIVATE_REPO: SETT-Centre-Data-and-AI/Valediction_development   # Development repo e.g. SETT-Centre-Data-and-AI/your_package_development
+      PUBLIC_REPO: SETT-Centre-Data-and-AI/Valediction                # Public repo      e.g. SETT-Centre-Data-and-AI/your_package
 
-      # Tokens
-      REPO_SYNC_TOKEN: ${{ steps.set.outputs.REPO_SYNC_TOKEN }}
-      PYPI_TOKEN: ${{ steps.set.outputs.PYPI_TOKEN }}
+      # Runtime and policy defaults
+      BUILD_SMOKE_PYTHON_VERSION: '3.13'
+      VERSION_CHECK_PYTHON_VERSION: '3.13'
+      PUBLISH_PYTHON_VERSION: '3.13'
+      PUBLISH_ON_RELEASE: 'true'                         # set 'true' to auto-publish on public release merges
+      SYNC_TO_PUBLIC: 'true'                             # set 'true' to auto-sync private release to public
+      TEST_MATRIX_JSON: '{"include":[{"os":"ubuntu-latest","python-version":"3.11"},{"os":"ubuntu-latest","python-version":"3.12"},{"os":"ubuntu-latest","python-version":"3.13"},{"os":"windows-latest","python-version":"3.13"}]}'
 
+    # ================================================ #
+    # ------------------- End Edit ------------------- #
+    # ================================================ #
 
     steps:
     - id: set
-      run: |2
-
-        # Package
-        echo "PACKAGE_NAME=${{ env.PACKAGE_NAME }}" >> "$GITHUB_OUTPUT"
-        echo "PACKAGE_SLUG=${{ env.PACKAGE_SLUG }}" >> "$GITHUB_OUTPUT"
-
-        # Private Repo
-        echo "PRIVATE_REPO=${{ env.PRIVATE_REPO }}" >> "$GITHUB_OUTPUT"
-        echo "PRIVATE_REPO_MAIN_BRANCH=${{ env.PRIVATE_REPO_MAIN_BRANCH }}" >> "$GITHUB_OUTPUT"
-        echo "PRIVATE_REPO_RELEASE_BRANCH=${{ env.PRIVATE_REPO_RELEASE_BRANCH }}" >> "$GITHUB_OUTPUT"
-        echo "PRIVATE_REPO_INCOMING_BRANCH=${{ env.PRIVATE_REPO_INCOMING_BRANCH }}" >> "$GITHUB_OUTPUT"
-
-        # Public Repo
-        echo "PUBLIC_REPO=${{ env.PUBLIC_REPO }}" >> "$GITHUB_OUTPUT"
-        echo "PUBLIC_REPO_RELEASE_BRANCH=${{ env.PUBLIC_REPO_RELEASE_BRANCH }}" >> "$GITHUB_OUTPUT"
-        echo "PUBLIC_REPO_INCOMING_BRANCH=${{ env.PUBLIC_REPO_INCOMING_BRANCH }}" >> "$GITHUB_OUTPUT"
+      shell: bash
+      run: |
+        echo "package-name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+        echo "package-slug=$PACKAGE_SLUG" >> "$GITHUB_OUTPUT"
+        echo "private-repo=$PRIVATE_REPO" >> "$GITHUB_OUTPUT"
+        echo "public-repo=$PUBLIC_REPO" >> "$GITHUB_OUTPUT"
+        echo "build-smoke-python-version=$BUILD_SMOKE_PYTHON_VERSION" >> "$GITHUB_OUTPUT"
+        echo "version-check-python-version=$VERSION_CHECK_PYTHON_VERSION" >> "$GITHUB_OUTPUT"
+        echo "publish-python-version=$PUBLISH_PYTHON_VERSION" >> "$GITHUB_OUTPUT"
+        echo "publish-on-release=$PUBLISH_ON_RELEASE" >> "$GITHUB_OUTPUT"
+        echo "sync-to-public=$SYNC_TO_PUBLIC" >> "$GITHUB_OUTPUT"
+        echo "test-matrix-json=$TEST_MATRIX_JSON" >> "$GITHUB_OUTPUT"

@@ -348,9 +348,11 @@ dataset.check()
 
 Validation arguments are as follows:
  - `feedback`: turn off progress for small performance improvement
- - `chunk_size`: where the `Dataset` contains items pointing to a `Path`, validate the data in chunks to optimise RAM
+ - `chunk_size`: where the `Dataset` contains items pointing to a `Path`, validate the data in chunks to optimise RAM (note: Valediction may run significantly faster when feeding `chunk_size=None`, as primary key hashing/cacheing across chunks is bypassed)
 
 Validation runtimes can be explored by calling `dataset['table_name'].validation_runtimes`
+
+**Note**: When RAM constraints do not apply, Valediction should run significantly faster when not chunking validation (i.e. first running `dataset.import_data()` or setting `chunk_size=None`). This is because primary key values do not need to be hashed and cached for comparison across chunks. Instead, Valediction will use vectorised checking for duplicates. 
 
 
 ## 🐞 Issue Inspection <a id="issue_inspection"></a>

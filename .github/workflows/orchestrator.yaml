@@ -1,0 +1,47 @@
+name: Repo Orchestrator
+
+# Reminder:
+# grant MANAGEMENT_TOKEN to repos that use sync workflows
+# grant PYPI_TOKEN to public repos that publish to PyPI
+# complete settings in config.yaml
+
+on:
+  pull_request:
+    branches: ['**']
+    types: [opened, reopened, synchronize, closed]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  load-identity:
+    name: Load Config
+    uses: ./.github/workflows/config.yaml
+
+  call-central-orchestrator:
+    name: Central Orchestrator
+    needs: load-identity
+    uses: SETT-Centre-Data-and-AI/workflows/.github/workflows/central-orchestrator.yaml@release
+    with:
+      event-name: ${{ github.event_name }}
+      event-action: ${{ github.event.action || '' }}
+      base-ref: ${{ github.base_ref || '' }}
+      head-ref: ${{ github.head_ref || '' }}
+      ref-name: ${{ github.ref_name }}
+      repository: ${{ github.repository }}
+      pr-merged: ${{ github.event.pull_request.merged || false }}
+
+      # Identity values from config.yaml
+      package-name: ${{ needs.load-identity.outputs.package-name }}
+      package-slug: ${{ needs.load-identity.outputs.package-slug }}
+      private-repo: ${{ needs.load-identity.outputs.private-repo }}
+      public-repo: ${{ needs.load-identity.outputs.public-repo }}
+      build-smoke-python-version: ${{ needs.load-identity.outputs.build-smoke-python-version }}
+      version-check-python-version: ${{ needs.load-identity.outputs.version-check-python-version }}
+      publish-python-version: ${{ needs.load-identity.outputs.publish-python-version }}
+      publish-on-release: ${{ needs.load-identity.outputs.publish-on-release }}
+      sync-to-public: ${{ needs.load-identity.outputs.sync-to-public }}
+      test-matrix-json: ${{ needs.load-identity.outputs.test-matrix-json }}
+    secrets: inherit
