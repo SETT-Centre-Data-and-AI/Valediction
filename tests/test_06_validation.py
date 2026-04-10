@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -19,7 +21,9 @@ def _isolate_global_default():  # noqa
     reset_default_config()
 
 
-@pytest.fixture(params=[None, 10, 1_000_000], ids=["no_chunk", "chunk_10", "chunk_1m"])
+@pytest.fixture(
+    params=[None, 100, 1_000_000], ids=["no_chunk", "chunk_100", "chunk_1m"]
+)
 def chunk_size(request: pytest.FixtureRequest) -> int:
     return request.param
 
@@ -35,6 +39,13 @@ def create_dataset_imported() -> Dataset:
     dataset = create_dataset()
     dataset.import_data()
     return dataset
+
+
+def _expand_ranges(ranges: list[Range]) -> set[int]:
+    rows: set[int] = set()
+    for r in ranges:
+        rows.update(range(r.start, r.end + 1))
+    return rows
 
 
 # Tests
@@ -187,6 +198,46 @@ def test_validation_raises_pk_collision(chunk_size):
     assert issues[0].ranges == [Range(0, 1), Range(4, 5)]
 
 
+def test_validation_raises_pk_collision_csv_no_chunk():
+    dataset = create_dataset_imported()
+    df = dataset[0].data.copy()
+    table_dictionary = dataset[0].table_dictionary
+    pk_columns = table_dictionary.get_primary_keys()
+
+    # Copy the 1st row PKs to the 2nd, and the 5th to the 6th
+    df.loc[1, pk_columns] = df.loc[0, pk_columns]
+    df.loc[5, pk_columns] = df.loc[4, pk_columns]
+
+    tmp_dir = Path("tests") / "_tmp"
+    csv_path = tmp_dir / f"{table_dictionary.name}.csv"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        df.to_csv(csv_path, index=False)
+
+        dataset_from_path = Dataset.create_from(csv_path)
+        dataset_from_path.import_dictionary(DEMO_DICTIONARY)
+
+        # Checks
+        with pytest.raises(DataIntegrityError):
+            dataset_from_path.validate(chunk_size=None)
+            dataset_from_path.check()
+
+        issues = [
+            issue
+            for issue in dataset_from_path[0].validator.issues
+            if issue.type == IssueType.PK_COLLISION
+        ]
+        assert issues
+        assert issues[0].ranges == [Range(0, 1), Range(4, 5)]
+    finally:
+        csv_path.unlink(missing_ok=True)
+        try:
+            tmp_dir.rmdir()
+        except OSError:
+            pass
+
+
 def test_validation_raises_pk_whitespace(chunk_size):
     dataset = create_dataset_imported()
     df = dataset[0].data
@@ -228,7 +279,7 @@ def test_validation_raises_pk_whitespace(chunk_size):
 
 
 @pytest.mark.parametrize(
-    "data_type", [DataType.DATE, DataType.DATETIME, DataType.INTEGER, DataType.FLOAT]
+    "data_type", [DataType.DATE, DataType.TIMESTAMP, DataType.INTEGER, DataType.FLOAT]
 )
 def test_raises_mismatch_text_to_alternate(chunk_size, data_type: DataType):
     dataset = create_dataset_imported()
@@ -414,6 +465,106 @@ def test_passes_without_forbidden_characters(chunk_size):
     assert not issues
 
 
+def test_raises_integer_out_of_range_no_overlap(chunk_size):
+    dataset = create_dataset_imported()
+
+    # Force strict INT4 behaviour
+    config = get_config()
+    config.allow_bigint = False
+
+    # Pick a stable demo column and force it to INTEGER in the dictionary
+    TABLE = "VITALS"
+    COLUMN = "RESULT"
+
+    item = dataset[TABLE]
+    table_dictionary = item.table_dictionary
+    col = table_dictionary.get_column(COLUMN)
+    col.data_type = DataType.INTEGER
+    col.length = None
+
+    df = item.data
+    n = len(df)
+    df[COLUMN] = np.arange(n, dtype="int64").astype("object")
+
+    # Inject known offenders (and one known good boundary)
+    df.loc[0, COLUMN] = "2147483648"  # out of range (too big)
+    df.loc[1, COLUMN] = "not_an_int"  # type mismatch
+    df.loc[2, COLUMN] = "2147483647"  # ok (max int4)
+    df.loc[3, COLUMN] = "-2147483649"  # out of range (too small)
+    df.loc[4, COLUMN] = "3.14"  # type mismatch
+
+    with pytest.raises(DataIntegrityError):
+        dataset.validate(chunk_size=chunk_size)
+        dataset.check()
+
+    # Pull issues for this specific table/column
+    type_mismatch_issues = [
+        issue
+        for issue in item.validator.issues
+        if issue.type == IssueType.TYPE_MISMATCH
+        and issue.table == TABLE
+        and issue.column == COLUMN
+    ]
+    out_of_range_issues = [
+        issue
+        for issue in item.validator.issues
+        if issue.type == IssueType.INTEGER_OUT_OF_RANGE
+        and issue.table == TABLE
+        and issue.column == COLUMN
+    ]
+
+    assert type_mismatch_issues, "Expected TYPE_MISMATCH issue for integer column"
+    assert out_of_range_issues, "Expected INTEGER_OUT_OF_RANGE issue for integer column"
+
+    # Exact ranges we injected (ensure stability + no accidental spread)
+    assert type_mismatch_issues[0].ranges == [Range(1, 1), Range(4, 4)]
+    assert out_of_range_issues[0].ranges == [Range(0, 0), Range(3, 3)]
+
+    # Ensure they don't overlap at the row level
+    tm_rows = _expand_ranges(type_mismatch_issues[0].ranges)
+    oor_rows = _expand_ranges(out_of_range_issues[0].ranges)
+    assert tm_rows.isdisjoint(oor_rows)
+
+
+def test_passes_integer_out_of_range_when_allow_bigint_true(chunk_size):
+    dataset = create_dataset_imported()
+
+    # Ensure BIGINT is allowed
+    config = get_config()
+    config.allow_bigint = True
+
+    TABLE = "VITALS"
+    COLUMN = "RESULT"
+
+    item = dataset[TABLE]
+    table_dictionary = item.table_dictionary
+    col = table_dictionary.get_column(COLUMN)
+    col.data_type = DataType.INTEGER
+    col.length = None
+
+    df = item.data
+    n = len(df)
+    df[COLUMN] = np.arange(n, dtype="int64").astype("object")
+
+    # BIGINTs
+    df.loc[0, COLUMN] = "2147483648"
+    df.loc[1, COLUMN] = "-2147483649"
+
+    # Should not raise
+    dataset.validate(chunk_size=chunk_size)
+    dataset.check()
+
+    # Expect no issues
+    out_of_range_issues = [
+        issue
+        for issue in item.validator.issues
+        if issue.type == IssueType.INTEGER_OUT_OF_RANGE
+        and issue.table == TABLE
+        and issue.column == COLUMN
+    ]
+    assert not out_of_range_issues
+
+
 def test_validate_import(chunk_size):
     dataset = create_dataset()
     dataset.validate(chunk_size=chunk_size)
@@ -445,14 +596,14 @@ def test_raises_apply_without_validation():
 
 def test_validate_convenience(chunk_size):
     dataset = validate(
-        data=DEMO_DATA, dictionary=DEMO_DICTIONARY, chunk_size=chunk_size
+        dataset=DEMO_DATA, dictionary=DEMO_DICTIONARY, chunk_size=chunk_size
     )
     dataset.check()
 
 
 def test_validate_convenience_with_import(chunk_size):
     dataset = validate(
-        data=DEMO_DATA,
+        dataset=DEMO_DATA,
         dictionary=DEMO_DICTIONARY,
         chunk_size=chunk_size,
         import_data=True,
@@ -464,7 +615,7 @@ def test_validate_convenience_raises_error(chunk_size):
     config = get_config()
     config.forbidden_characters = ["a"]
     dataset = validate(
-        data=DEMO_DATA,
+        dataset=DEMO_DATA,
         dictionary=DEMO_DICTIONARY,
         chunk_size=chunk_size,
         import_data=True,

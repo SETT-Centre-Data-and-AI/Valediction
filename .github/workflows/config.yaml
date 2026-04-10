@@ -1,0 +1,86 @@
+name: Repo Config
+
+# ============================================================ #
+# Repository identity and runtime/policy configuration
+# Edit values below to match your repository setup
+# ============================================================ #
+
+on:
+  workflow_call:
+    outputs:
+      package-name:
+        value: ${{ jobs.export-identity.outputs.package-name }}
+      package-slug:
+        value: ${{ jobs.export-identity.outputs.package-slug }}
+      private-repo:
+        value: ${{ jobs.export-identity.outputs.private-repo }}
+      public-repo:
+        value: ${{ jobs.export-identity.outputs.public-repo }}
+      build-smoke-python-version:
+        value: ${{ jobs.export-identity.outputs.build-smoke-python-version }}
+      version-check-python-version:
+        value: ${{ jobs.export-identity.outputs.version-check-python-version }}
+      publish-python-version:
+        value: ${{ jobs.export-identity.outputs.publish-python-version }}
+      publish-on-release:
+        value: ${{ jobs.export-identity.outputs.publish-on-release }}
+      sync-to-public:
+        value: ${{ jobs.export-identity.outputs.sync-to-public }}
+      test-matrix-json:
+        value: ${{ jobs.export-identity.outputs.test-matrix-json }}
+
+jobs:
+  export-identity:
+    name: Export Config
+    runs-on: ubuntu-latest
+    outputs:
+      package-name: ${{ steps.set.outputs.package-name }}
+      package-slug: ${{ steps.set.outputs.package-slug }}
+      private-repo: ${{ steps.set.outputs.private-repo }}
+      public-repo: ${{ steps.set.outputs.public-repo }}
+      build-smoke-python-version: ${{ steps.set.outputs.build-smoke-python-version }}
+      version-check-python-version: ${{ steps.set.outputs.version-check-python-version }}
+      publish-python-version: ${{ steps.set.outputs.publish-python-version }}
+      publish-on-release: ${{ steps.set.outputs.publish-on-release }}
+      sync-to-public: ${{ steps.set.outputs.sync-to-public }}
+      test-matrix-json: ${{ steps.set.outputs.test-matrix-json }}
+
+    # ================================================ #
+    # Edit values below to match your repository setup #
+    # ================================================ #
+
+    env:
+      # Package identity
+      PACKAGE_NAME: valediction                                       # e.g., your_package
+      PACKAGE_SLUG: valediction                                       # e.g., your-package (URL-safe)
+
+      # Repositories
+      PRIVATE_REPO: SETT-Centre-Data-and-AI/Valediction_development   # Development repo e.g. SETT-Centre-Data-and-AI/your_package_development
+      PUBLIC_REPO: SETT-Centre-Data-and-AI/Valediction                # Public repo      e.g. SETT-Centre-Data-and-AI/your_package
+
+      # Runtime and policy defaults
+      BUILD_SMOKE_PYTHON_VERSION: '3.13'
+      VERSION_CHECK_PYTHON_VERSION: '3.13'
+      PUBLISH_PYTHON_VERSION: '3.13'
+      PUBLISH_ON_RELEASE: 'true'                         # set 'true' to auto-publish on public release merges
+      SYNC_TO_PUBLIC: 'true'                             # set 'true' to auto-sync private release to public
+      TEST_MATRIX_JSON: '{"include":[{"os":"ubuntu-latest","python-version":"3.11"},{"os":"ubuntu-latest","python-version":"3.12"},{"os":"ubuntu-latest","python-version":"3.13"},{"os":"windows-latest","python-version":"3.13"}]}'
+
+    # ================================================ #
+    # ------------------- End Edit ------------------- #
+    # ================================================ #
+
+    steps:
+    - id: set
+      shell: bash
+      run: |
+        echo "package-name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+        echo "package-slug=$PACKAGE_SLUG" >> "$GITHUB_OUTPUT"
+        echo "private-repo=$PRIVATE_REPO" >> "$GITHUB_OUTPUT"
+        echo "public-repo=$PUBLIC_REPO" >> "$GITHUB_OUTPUT"
+        echo "build-smoke-python-version=$BUILD_SMOKE_PYTHON_VERSION" >> "$GITHUB_OUTPUT"
+        echo "version-check-python-version=$VERSION_CHECK_PYTHON_VERSION" >> "$GITHUB_OUTPUT"
+        echo "publish-python-version=$PUBLISH_PYTHON_VERSION" >> "$GITHUB_OUTPUT"
+        echo "publish-on-release=$PUBLISH_ON_RELEASE" >> "$GITHUB_OUTPUT"
+        echo "sync-to-public=$SYNC_TO_PUBLIC" >> "$GITHUB_OUTPUT"
+        echo "test-matrix-json=$TEST_MATRIX_JSON" >> "$GITHUB_OUTPUT"

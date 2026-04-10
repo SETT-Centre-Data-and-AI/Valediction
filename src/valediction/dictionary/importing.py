@@ -11,7 +11,6 @@ from valediction.dictionary.helpers import (
     _get_required_header,
     _is_missing,
     _norm_header_map,
-    _normalise_name,
     _parse_int,
     _parse_truthy,
     _row_is_blank,
@@ -19,7 +18,7 @@ from valediction.dictionary.helpers import (
 from valediction.dictionary.integrity import REQUIRED_SHEETS
 from valediction.dictionary.model import Column, Dictionary, Table
 from valediction.exceptions import DataDictionaryError, DataDictionaryImportError
-from valediction.support import list_as_bullets
+from valediction.support import _normalise, _strip, list_as_bullets
 
 
 @dataclass
@@ -80,6 +79,13 @@ class ExcelDataDictionary:
             raise error
 
     # Import & Helpers
+    def _resolve_table_name(self, name: str) -> str | None:
+        """Return the canonical table name as it appears in Tables sheet (or None)."""
+        target = _normalise(name)
+        return next(
+            (t for t in self.table_metadata.keys() if _normalise(t) == target), None
+        )
+
     def _open_workbook(self) -> None:
         if not self.path.exists():
             raise DataDictionaryImportError(f"File not found: {self.path}")
@@ -140,20 +146,27 @@ class ExcelDataDictionary:
         description_col_header = _get_required_header(header_map, "description")
 
         meta: dict[str, str | None] = {}
+        seen: set[str] = set()
+
         for _, row in tables_df.iterrows():
             if _is_missing(row[table_col_header]):
                 continue
-            table_name = _normalise_name(str(row[table_col_header]))
+
+            table_name = _strip(str(row[table_col_header]))
             table_description = (
                 None
                 if _is_missing(row[description_col_header])
                 else str(row[description_col_header])
             )
-            if table_name in meta:
+
+            key = _normalise(table_name)
+            if key in seen:
                 raise DataDictionaryImportError(
                     f"Duplicate table '{table_name}' in Tables sheet."
                 )
+            seen.add(key)
             meta[table_name] = table_description
+
         if not meta:
             raise DataDictionaryImportError(
                 "Data Dictionary sheet 'Tables' contains no table rows."
@@ -177,12 +190,13 @@ class ExcelDataDictionary:
                 or _is_missing(row[code_col_header])
             ):
                 continue
-            table_name = _normalise_name(str(row[table_col_header]))
-            column_name = _normalise_name(str(row[column_col_header]))
-            enum_map.setdefault((table_name, column_name), {})
-            enum_map[(table_name, column_name)][row[code_col_header]] = row[
-                name_col_header
-            ]
+            table_name = _strip(str(row[table_col_header]))
+            column_name = _strip(str(row[column_col_header]))
+            resolved_table = self._resolve_table_name(table_name) or table_name
+            enum_key = (_normalise(resolved_table), _normalise(column_name))
+            enum_map.setdefault(enum_key, {})
+            enum_map[enum_key][row[code_col_header]] = row[name_col_header]
+
         self.enumerations = enum_map
 
     # Parse Columns
@@ -234,7 +248,12 @@ class ExcelDataDictionary:
 
             self.table_columns[inputs.table_name].append(column_obj)
             if inputs.has_enumerations:
-                self.enum_flags.add((inputs.table_name, inputs.column_name))
+                self.enum_flags.add(
+                    (
+                        _normalise(inputs.table_name),
+                        _normalise(inputs.column_name),
+                    )
+                )
 
         if errors:
             raise DataDictionaryImportError(
@@ -279,7 +298,7 @@ class ExcelDataDictionary:
 
     # Validate Foreign Keys
     def _validate_foreign_keys(self) -> None:
-        name_to_table = {t.name: t for t in self.tables}
+        name_to_table = {_normalise(t.name): t for t in self.tables}
         errors: list[str] = []
         for table in self.tables:
             for column in table:
@@ -292,9 +311,9 @@ class ExcelDataDictionary:
                     )
                     continue
                 target_table_raw, target_column_raw = target.split(".", 1)
-                target_table_name = _normalise_name(target_table_raw)
-                target_column_name = _normalise_name(target_column_raw)
-                referenced_table = name_to_table.get(target_table_name)
+                target_table_name = _strip(target_table_raw)
+                target_column_name = _strip(target_column_raw)
+                referenced_table = name_to_table.get(_normalise(target_table_name))
                 if not referenced_table:
                     errors.append(
                         f"{table.name}.{column.name} references unknown table {target_table_name!r}."
@@ -345,7 +364,7 @@ class ExcelDataDictionary:
         enumeration_flag_col_header = header_map.get("enumerations")
         primary_key_col_header = header_map.get("primary_key")
         foreign_key_col_header = header_map.get("foreign_key_target")
-        description_col_header = header_map.get("description")
+        description_col_header = header_map.get("column_description")
         return (
             table_col_header,
             column_col_header,
@@ -392,12 +411,16 @@ class ExcelDataDictionary:
                 f"{row_context}: missing required field(s): {', '.join(missing_fields)}."
             )
 
-        table_name = _normalise_name(str(row[table_col_header]))
-        column_name = _normalise_name(str(row[column_col_header]))
-        if table_name not in self.table_metadata:
+        table_name_raw = _strip(str(row[table_col_header]))
+        column_name = _strip(str(row[column_col_header]))
+
+        resolved_table_name = self._resolve_table_name(table_name_raw)
+        if resolved_table_name is None:
             raise DataDictionaryImportError(
-                f"{row_context}: Table '{table_name}' not present in Tables sheet."
+                f"{row_context}: Table '{table_name_raw}' not present in Tables sheet."
             )
+
+        table_name = resolved_table_name
 
         order_int = _parse_int(row[order_col_header], "Order", row_context)
         length_int = (
@@ -461,7 +484,7 @@ class ExcelDataDictionary:
 
     def _make_column(self, inputs: _ColumnInputs) -> Column:
         enums_for_column = self.enumerations.get(
-            (inputs.table_name, inputs.column_name), {}
+            (_normalise(inputs.table_name), _normalise(inputs.column_name)), {}
         )
         return Column(
             name=inputs.column_name,

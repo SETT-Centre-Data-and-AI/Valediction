@@ -4,6 +4,7 @@ import re
 import warnings
 
 import pandas as pd
+from pandas.api.types import is_object_dtype, is_string_dtype
 
 from valediction.data_types.data_type_helpers import infer_datetime_format
 from valediction.data_types.data_types import DataType
@@ -53,8 +54,8 @@ class ColumnState:
             return DataType.FLOAT, None
         if self.data_type == DataType.DATE:
             return DataType.DATE, None
-        if self.data_type == DataType.DATETIME:
-            return DataType.DATETIME, None
+        if self.data_type == DataType.TIMESTAMP:
+            return DataType.TIMESTAMP, None
 
         return DataType.TEXT, _len1()
 
@@ -123,7 +124,7 @@ class TypeInferer:
             _handling_function: callable = {
                 DataType.TEXT: self._handle_state_text,
                 DataType.DATE: self._handle_state_date,
-                DataType.DATETIME: self._handle_state_datetime,
+                DataType.TIMESTAMP: self._handle_state_datetime,
                 DataType.INTEGER: self._handle_state_integer,
                 DataType.FLOAT: self._handle_state_float,
             }.get(state.data_type, self._handle_state_text)
@@ -141,20 +142,31 @@ class TypeInferer:
         self, s: pd.Series
     ) -> tuple[pd.Series, pd.Series, pd.Series, int | None]:
         self.__begin_step(step="Trimming whitespace")
-        trimmed = s.str.strip()
+        is_text = is_string_dtype(s) or is_object_dtype(s)
+
+        if is_text:
+            trimmed = s.astype("string").str.strip()
+        else:
+            trimmed = s
         self.__complete_step()
 
         self.__begin_step(step="Checking nulls")
-        nulls = trimmed.isna() | trimmed.str.lower().isin(self.null_tokens)
+        if is_text:
+            nulls = trimmed.isna() | trimmed.str.lower().isin(self.null_tokens)
+        else:
+            nulls = trimmed.isna()
         self.__complete_step()
 
         self.__begin_step(step="Checking max length")
-        lengths = s.str.len()
-        max_len = int(lengths.max(skipna=True)) if lengths.notna().any() else None
+        if is_text:
+            lengths = trimmed.str.len()
+            max_len = int(lengths.max(skipna=True)) if lengths.notna().any() else None
+        else:
+            max_len = None
         self.__complete_step()
 
         self.__begin_step(step="Setting non-null mask")
-        nonnull_mask = (~nulls) & s.notna()
+        nonnull_mask = (~nulls) & trimmed.notna()
         self.__complete_step()
 
         return trimmed, nulls, nonnull_mask, max_len
@@ -193,7 +205,7 @@ class TypeInferer:
             if ok.all():
                 self._transition(
                     st,
-                    DataType.DATETIME if has_time.any() else DataType.DATE,
+                    DataType.TIMESTAMP if has_time.any() else DataType.DATE,
                     f"cached datetime format={st.cached_datetime_format!r}",
                 )
                 self.__complete_step()
@@ -210,7 +222,7 @@ class TypeInferer:
                     st.cached_datetime_format = fmt
                     self._transition(
                         st,
-                        DataType.DATETIME if has_time.any() else DataType.DATE,
+                        DataType.TIMESTAMP if has_time.any() else DataType.DATE,
                         f"explicit datetime format={fmt!r}",
                     )
                     self.__complete_step()
@@ -276,7 +288,7 @@ class TypeInferer:
             st.lock_text_permanent = True
             self._transition(st, DataType.TEXT, "datetime parse failures")
         elif has_time.any():
-            self._transition(st, DataType.DATETIME, "time component detected")
+            self._transition(st, DataType.TIMESTAMP, "time component detected")
 
         self.__complete_step()
 
@@ -334,7 +346,7 @@ class TypeInferer:
             if ok.all():
                 self._transition(
                     st,
-                    DataType.DATETIME if has_time.any() else DataType.DATE,
+                    DataType.TIMESTAMP if has_time.any() else DataType.DATE,
                     f"cached datetime format={st.cached_datetime_format!r}",
                 )
                 return True
@@ -377,7 +389,7 @@ class TypeInferer:
         if ok.all():
             self._transition(
                 st,
-                DataType.DATETIME if has_time.any() else DataType.DATE,
+                DataType.TIMESTAMP if has_time.any() else DataType.DATE,
                 f"explicit datetime format={st.cached_datetime_format!r}",
             )
             return True

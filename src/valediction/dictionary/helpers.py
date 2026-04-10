@@ -26,9 +26,6 @@ def _check_name(name: str, entity: Literal["table", "column"]) -> list[str]:
         else config.max_column_name_length
     )
 
-    if name != name.upper():  # name must be uppercase
-        errors.append("must be uppercase")
-
     if invalid_chars.search(name):  # check invalid characters
         bad = set(invalid_chars.findall(name))
         errors.append(
@@ -109,14 +106,10 @@ def _check_primary_key(primary_key: int | None, data_type: DataType) -> list[str
     ):
         errors.append(
             f"invalid data type '{data_type.value}' for primary key column; "
-            "primary keys must be Text, Integer, Date, or Datetime"
+            "primary keys must be Text, Integer, Date, or Timestamp"
         )
 
     return errors
-
-
-def _normalise_name(name: str) -> str:
-    return name.upper().strip()
 
 
 def _norm_header_map(columns: list) -> dict:

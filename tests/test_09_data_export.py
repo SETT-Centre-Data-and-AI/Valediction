@@ -49,7 +49,7 @@ def get_dataset() -> Dataset:
 def test_item_export_post_validation() -> None:
     dataset = get_dataset()
     dataset.import_data()
-    dataset.validate()
+    dataset.validate(feedback=False)
     item = dataset[0]
 
     with cleanup(item):
@@ -77,7 +77,7 @@ def test_raises_item_export_no_import() -> None:
 
 def test_raises_item_export_validated_but_no_import() -> None:
     dataset = get_dataset()
-    dataset.validate()
+    dataset.validate(feedback=False)
     item = dataset[0]
 
     with cleanup(item):
@@ -107,7 +107,7 @@ def test_item_export_validation_override() -> None:
 def test_item_export_raises_on_conflict() -> None:
     dataset = get_dataset()
     dataset.import_data()
-    dataset.validate()
+    dataset.validate(feedback=False)
     item = dataset[0]
 
     with cleanup(item):
@@ -119,7 +119,7 @@ def test_item_export_raises_on_conflict() -> None:
 def test_item_export_overwrite() -> None:
     dataset = get_dataset()
     dataset.import_data()
-    dataset.validate()
+    dataset.validate(feedback=False)
     item = dataset[0]
 
     with cleanup(item):
@@ -131,7 +131,7 @@ def test_item_export_overwrite() -> None:
 def test_dataset_export_post_validation() -> None:
     dataset = get_dataset()
     dataset.import_data()
-    dataset.validate()
+    dataset.validate(feedback=False)
 
     with cleanup(dataset):
         dataset.export_data(directory=EXPORT_DIR)
@@ -146,7 +146,7 @@ def test_dataset_skips_unvalidated() -> None:
     unvalidated = [dataset[i] for i in range(len(dataset)) if i not in indexes]
 
     for item in validated:
-        item.validate()
+        item.validate(feedback=False)
 
     with cleanup(dataset):
         dataset.export_data(directory=EXPORT_DIR)
@@ -158,7 +158,7 @@ def test_dataset_skips_unvalidated() -> None:
 
 def test_dataset_export_skips_unimported() -> None:
     dataset = get_dataset()
-    dataset.validate()
+    dataset.validate(feedback=False)
     indexes = [0, 1]
 
     imported = [dataset[i] for i in indexes]
@@ -190,7 +190,7 @@ def test_dataset_export_validation_override() -> None:
 def test_dataset_export_raises_on_conflict() -> None:
     dataset = get_dataset()
     dataset.import_data()
-    dataset.validate()
+    dataset.validate(feedback=False)
 
     with cleanup(dataset):
         dataset.export_data(directory=EXPORT_DIR)
@@ -205,7 +205,7 @@ def test_dataset_export_raises_on_conflict() -> None:
 def test_dataset_export_overwrite() -> None:
     dataset = get_dataset()
     dataset.import_data()
-    dataset.validate()
+    dataset.validate(feedback=False)
 
     with cleanup(dataset):
         dataset.export_data(directory=EXPORT_DIR)

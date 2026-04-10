@@ -9,10 +9,9 @@ from valediction.dictionary.helpers import (
     _check_name,
     _check_order,
     _check_primary_key,
-    _normalise_name,
 )
 from valediction.exceptions import DataDictionaryError
-from valediction.support import list_as_bullets
+from valediction.support import _normalise, _strip, list_as_bullets
 
 
 class Column:
@@ -44,7 +43,7 @@ class Column:
         description: str | None = None,
         datetime_format: str | None = None,
     ):
-        self.name = _normalise_name(name)
+        self.name = _strip(name)
         self.order = int(order) if order is not None else None
         self.data_type: DataType = None
         self.length = int(length) if length is not None else None
@@ -127,7 +126,7 @@ class Table(list[Column]):
         columns: list[Column] | None = None,
     ):
         super().__init__()
-        self.name = _normalise_name(name)
+        self.name = _strip(name)
         self.description = description
         for column in columns or []:
             self.add_column(column)
@@ -139,24 +138,28 @@ class Table(list[Column]):
         )
         return f"Table(name={self.name!r}, description={self.description!r}{cols_str})"
 
+    def __key(self, name: str) -> str:
+        return _normalise(name)
+
     def __getitem__(self, key: int | str) -> Column:
         if isinstance(key, int):
             return super().__getitem__(key)
-        target = _normalise_name(key)
-        found = next((c for c in self if c.name == target), None)
+
+        target_key = self.__key(key)
+        found = next((c for c in self if self.__key(c.name) == target_key), None)
         if not found:
             raise KeyError(f"Column {key!r} not found in table {self.name!r}.")
         return found
 
     def __get(self, name: str, default: Column | None = None) -> Column | None:
-        target = _normalise_name(name)
-        return next((c for c in self if c.name == target), default)
+        target_key = self.__key(name)
+        return next((c for c in self if self.__key(c.name) == target_key), default)
 
     # Getters
     def index_of(self, name: str) -> int | None:
-        target = _normalise_name(name)
+        target_key = self.__key(name)
         for i, c in enumerate(self):
-            if c.name == target:
+            if self.__key(c.name) == target_key:
                 return i
         return None
 
@@ -303,16 +306,17 @@ class Table(list[Column]):
         if not isinstance(column, Column):
             raise DataDictionaryError("Only Column objects can be added to a Table.")
 
-        if column.name in self.get_column_names():
-            conflict = self.get_column(column.name)
+        incoming_key = self.__key(column.name)
+        conflict = next((c for c in self if self.__key(c.name) == incoming_key), None)
+        if conflict is not None:
             raise DataDictionaryError(
-                f"Column {column.name!r} already exists (order={conflict.order!r})"
+                f"Column {column.name!r} already exists (order={conflict.order!r}, as {conflict.name!r})."
             )
 
         if column.order in self.get_column_orders():
-            conflict = self.get_column(column.order)
+            conflict_by_order = self.get_column(column.order)
             raise DataDictionaryError(
-                f"Order {column.order!r} already exists (name={conflict.name!r})"
+                f"Order {column.order!r} already exists (name={conflict_by_order.name!r})"
             )
 
         if column.primary_key is not None:
@@ -339,10 +343,7 @@ class Table(list[Column]):
         Raises:
             DataDictionaryError: if the column does not exist
         """
-        if isinstance(column, str):
-            name = self.get_column(column).name
-        else:
-            name = self.get_column(column).name  # by order
+        name = self.get_column(column).name
         remaining = [c for c in self if c.name != name]
         self.clear()
         super().extend(remaining)
@@ -367,16 +368,17 @@ class Table(list[Column]):
         for col in self:
             col.primary_key = None
 
-        # Resolve and dedupe
+        # Resolve and deduplicate
         resolved: list[Column] = []
         seen: set[str] = set()
         for key in primary_keys:
             col = self.get_column(key)
-            if col.name in seen:
+            col_key = self.__key(col.name)
+            if col_key in seen:
                 raise DataDictionaryError(
                     f"Duplicate column {col.name!r} provided for table {self.name!r}."
                 )
-            seen.add(col.name)
+            seen.add(col_key)
             resolved.append(col)
 
         # Assign ordinals 1..N
@@ -416,14 +418,20 @@ class Dictionary(list[Table]):
     ):
         super().__init__()
         self.name = name
+
+        if isinstance(tables, Table):
+            tables = [tables]
+
         for t in tables or []:
             self.add_table(t)
+
         self.organisations = organisations
         self.version = version
         self.version_notes = version_notes
         self.inclusion_criteria = inclusion_criteria
         self.exclusion_criteria = exclusion_criteria
         self.imported = imported
+        self.__check_variables()
 
     # Properties
     @property
@@ -439,24 +447,85 @@ class Dictionary(list[Table]):
         tables = list_as_bullets(elements=[str(t) for t in self], bullet="\n- ")
         return f"Dictionary(name={self.name!r}, imported={self.imported!r}, {tables})"
 
+    def __key(self, name: str) -> str:
+        return _normalise(name)
+
     def __getitem__(self, key: int | str) -> Table:
         if isinstance(key, int):
             return super().__getitem__(key)
-        target = _normalise_name(key)
-        found = next((t for t in self if t.name == target), None)
+
+        target_key = self.__key(key)
+        found = next((t for t in self if self.__key(t.name) == target_key), None)
         if not found:
             raise KeyError(f"Table {key!r} not found in Dictionary.")
         return found
 
-    # Getters
     def __get(self, name: str, default: Table | None = None) -> Table | None:
-        target = _normalise_name(name)
-        return next((t for t in self if t.name == target), default)
+        target_key = self.__key(name)
+        return next((t for t in self if self.__key(t.name) == target_key), default)
 
+    # Checkers
+    def __check_variables(self) -> None:
+        self.__check_name()
+        self.__check_organisations()
+        self.__check_version()
+        self.__check_version_notes()
+        self.__check_criteria()
+
+    def __check_name(self) -> None:
+        # Check name
+        if self.name is not None:
+            if not isinstance(self.name, str):
+                raise DataDictionaryError("Dictionary `name` must be a string.")
+
+    def __check_organisations(self) -> None:
+        # Check organisations
+        if self.organisations is not None:
+            if not isinstance(self.organisations, str):
+                raise DataDictionaryError(
+                    "Dictionary `organisations` must be a string."
+                )
+
+    def __check_version(self) -> None:
+        # Check version
+        if self.version is not None:
+            if not isinstance(self.version, (str, int, float)):
+                raise DataDictionaryError(
+                    "Dictionary `version` must be a string, int, or float."
+                )
+
+            if isinstance(self.version, (int, float)):
+                self.version = str(self.version)
+
+        # Check version_notes
+
+    def __check_version_notes(self) -> None:
+        if self.version_notes is not None:
+            if not isinstance(self.version_notes, str):
+                raise DataDictionaryError(
+                    "Dictionary `version_notes` must be a string."
+                )
+
+    def __check_criteria(self) -> None:
+        # Check inclusion_criteria
+        if self.inclusion_criteria is not None:
+            if not isinstance(self.inclusion_criteria, str):
+                raise DataDictionaryError(
+                    "Dictionary `inclusion_criteria` must be a string."
+                )
+
+        # Check exclusion_criteria
+        if self.exclusion_criteria is not None:
+            if not isinstance(self.exclusion_criteria, str):
+                raise DataDictionaryError(
+                    "Dictionary exclusion_criteria must be a string."
+                )
+
+    # Getters
     def index_of(self, name: str) -> int | None:
-        target = _normalise_name(name)
+        target_key = self.__key(name)
         for i, t in enumerate(self):
-            if t.name == target:
+            if self.__key(t.name) == target_key:
                 return i
         return None
 
@@ -484,12 +553,9 @@ class Dictionary(list[Table]):
         Raises:
             KeyError: If the table is not found in the dictionary.
         """
-        target = _normalise_name(table)
-        found = next((t for t in self if t.name == target), None)
-
-        if not found:
+        found = self.__get(table)
+        if found is None:
             raise KeyError(f"Table {table!r} not found in Dictionary.")
-
         return found
 
     # Manipulation
@@ -508,8 +574,14 @@ class Dictionary(list[Table]):
             raise DataDictionaryError(
                 "Only Table objects can be added to a Dictionary."
             )
-        if table.name in self.get_table_names():
-            raise DataDictionaryError(f"Table {table.name!r} already exists.")
+
+        incoming_key = self.__key(table.name)
+        conflict = next((t for t in self if self.__key(t.name) == incoming_key), None)
+        if conflict is not None:
+            raise DataDictionaryError(
+                f"Table {table.name!r} already exists (as {conflict.name!r})."
+            )
+
         super().append(table)
 
     def remove_table(self, table: str) -> None:

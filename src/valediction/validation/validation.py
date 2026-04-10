@@ -14,13 +14,14 @@ from valediction.data_types.data_types import DataType
 from valediction.datasets.datasets_helpers import DataLike, DatasetItemLike
 from valediction.dictionary.model import Table
 from valediction.exceptions import DataDictionaryImportError, DataIntegrityError
+from valediction.integrity import get_config
 from valediction.io.csv_readers import (
     CsvReadConfig,
     FrameChunk,
     iter_csv_chunks,
 )
 from valediction.progress import Progress
-from valediction.support import _get_runtime_string, calculate_runtime
+from valediction.support import _get_runtime_string, _normalise, calculate_runtime
 from valediction.validation.helpers import (
     _column_has_values,
     _set_nulls,
@@ -29,6 +30,7 @@ from valediction.validation.helpers import (
     invalid_mask_datetime,
     invalid_mask_float,
     invalid_mask_integer,
+    invalid_mask_integer_out_of_range,
     invalid_mask_text_forbidden_characters,
     invalid_mask_text_too_long,
     mask_to_ranges,
@@ -38,7 +40,7 @@ from valediction.validation.issues import Issues, IssueType, Range
 
 IMPORTING_DATA = "Importing data"
 SINGLE_STEPS: int = 3  # tweak if adding/amending step tracking
-CHUNK_STEPS: int = 12  # tweak if adding/amending step tracking
+CHUNK_STEPS: int = 13  # tweak if adding/amending step tracking
 
 
 class Validator:
@@ -62,7 +64,7 @@ class Validator:
         dataset_item: DatasetItemLike,
         table_dictionary: Table,
         feedback: bool = True,
-        chunk_size: int = 10_000_000,
+        chunk_size: int | None = 10_000_000,
         _padding: int = 0,
     ):
         # User Variables
@@ -86,7 +88,9 @@ class Validator:
         self._dt_needs_infer: set[str] = set()
 
         #  Helpers
-        self._column_names: set = set(self.table_dictionary.get_column_names())
+        self._column_names: set[str] = {
+            _normalise(n) for n in self.table_dictionary.get_column_names()
+        }
 
         # Progress Tracking
         self.progress: Progress | None = None
@@ -149,11 +153,25 @@ class Validator:
             datetime_format = column.datetime_format
             data_type = column.data_type
 
-            if data_type in (DataType.DATE, DataType.DATETIME):
+            if data_type in (DataType.DATE, DataType.TIMESTAMP):
                 self._dt_format_cache[name] = datetime_format
 
                 if not datetime_format:
                     self._dt_needs_infer.add(name)
+
+    # Column Scanning
+    def _resolve_df_col(self, df: DataFrame, name: str) -> str | None:
+        """Return the actual df column label matching name case-insensitively."""
+        target = _normalise(name)
+        return next((c for c in df.columns if _normalise(str(c)) == target), None)
+
+    def _resolve_df_cols(self, df: DataFrame, names: list[str]) -> list[str]:
+        resolved: list[str] = []
+        for n in names:
+            c = self._resolve_df_col(df, n)
+            if c is not None:
+                resolved.append(c)
+        return resolved
 
     # Validate
     def validate(self):
@@ -187,6 +205,7 @@ class Validator:
             # Structural Checks
             self._check_for_column_nulls(df)
             self._check_primary_key_whitespace(df, start_row=start)
+            self._check_primary_key_text_lengths(df, start_row=start)
             self._check_primary_key_integrity(df, start_row=start)
 
             # Data Type Checks
@@ -272,28 +291,35 @@ class Validator:
     # Validation: Start Helpers
     def _check_for_missing_columns(self, df: DataFrame):
         self.__begin_step(step="Checking for missing columns")
-        missing = self._column_names - set(df.columns)
-        if missing:
-            for column in missing:
-                self.issues.add(
-                    issue_type=IssueType.MISSING_COLUMN,
-                    table=self.table_name,
-                    column=column,
-                    parent=self.dataset_item,
-                )
+
+        dict_names = self.table_dictionary.get_column_names()
+        dict_keys = {_normalise(name) for name in dict_names}
+
+        df_keys = {_normalise(str(column)) for column in df.columns}
+
+        missing_keys = dict_keys - df_keys
+        if missing_keys:
+            for name in dict_names:
+                if _normalise(name) in missing_keys:
+                    self._save_issues(IssueType.MISSING_COLUMN, name)
+
         self.__complete_step()
 
     def _check_for_extra_columns(self, df: DataFrame):
         self.__begin_step(step="Checking for extra columns")
-        extra = set(df.columns) - self._column_names
-        if extra:
-            for column in extra:
-                self.issues.add(
-                    issue_type=IssueType.EXTRA_COLUMN,
-                    table=self.table_name,
-                    column=column,
-                    parent=self.dataset_item,
-                )
+
+        dict_keys = {
+            _normalise(name) for name in self.table_dictionary.get_column_names()
+        }
+        df_cols = [str(column) for column in df.columns]
+        df_keys = {_normalise(column) for column in df_cols}
+
+        extra_keys = df_keys - dict_keys
+        if extra_keys:
+            for col in df_cols:
+                if _normalise(col) in extra_keys:
+                    self._save_issues(IssueType.EXTRA_COLUMN, col)
+
         self.__complete_step()
 
     # Validation: Chunk Helpers
@@ -319,21 +345,57 @@ class Validator:
 
         # Check for whitespace (text cols only)
         self.__begin_step(step="Checking for primary key whitespace")
-        pk_cols_text = []
-        for column in self.table_dictionary:
-            if column.name in pk_cols and column.data_type in [DataType.TEXT]:
-                pk_cols_text.append(column.name)
+        pk_keys = {_normalise(p) for p in pk_cols}
+        pk_cols_text = [
+            column.name
+            for column in self.table_dictionary
+            if _normalise(column.name) in pk_keys and column.data_type is DataType.TEXT
+        ]
 
         if pk_cols_text:
-            space_mask = pk_contains_whitespace_mask(df[pk_cols_text])
+            pk_cols_text_df = self._resolve_df_cols(df, pk_cols_text)
+            space_mask = pk_contains_whitespace_mask(df[pk_cols_text_df])
             if space_mask.any():
-                self.issues.add(
-                    issue_type=IssueType.PK_WHITESPACE,
-                    table=self.table_name,
-                    column=None,
-                    ranges=mask_to_ranges(space_mask, start_row),
-                    parent=self.dataset_item,
-                )
+                self._save_issues(IssueType.PK_WHITESPACE, None, space_mask, start_row)
+        self.__complete_step()
+
+    def _check_primary_key_text_lengths(self, df: DataFrame, start_row: int) -> None:
+        self.__begin_step(step="Checking primary key text lengths")
+        pk_cols = self.table_dictionary.get_primary_keys()
+        if not pk_cols:
+            self.__complete_step()
+            return
+
+        config = get_config()
+        limit = int(getattr(config, "pk_col_max_length", 0) or 0)
+        if limit <= 0:
+            self.__complete_step()
+            return
+
+        pk_keys = {_normalise(p) for p in pk_cols}
+
+        # Only check TEXT PK cols where dictionary length is unset or exceeds the cap
+        pk_text_cols = []
+        for column in self.table_dictionary:
+            if _normalise(column.name) not in pk_keys:
+                continue
+            if column.data_type is not DataType.TEXT:
+                continue
+            dict_len = column.length
+            if dict_len is None or dict_len > limit:
+                pk_text_cols.append(column.name)
+
+        if pk_text_cols:
+            for dict_col in pk_text_cols:
+                df_col = self._resolve_df_col(df, dict_col)
+                if df_col is None:
+                    continue
+                invalid = invalid_mask_text_too_long(df[df_col], limit)
+                if invalid.any():
+                    self._save_issues(
+                        IssueType.TEXT_TOO_LONG, dict_col, invalid, start_row
+                    )
+
         self.__complete_step()
 
     def _check_primary_key_integrity(self, df, start_row: int) -> None:
@@ -341,9 +403,66 @@ class Validator:
         if not pk_cols:
             return
 
+        one_chunk_validation = (
+            start_row == 0
+            and not self.tracker_pk_hashes
+            and (
+                self.data_is_dataframe
+                or self.chunk_size is None
+                or (isinstance(self.chunk_size, int) and self.chunk_size <= 0)
+            )
+        )
+
+        if one_chunk_validation:
+            self._check_primary_key_integrity_no_chunks(
+                df=df, start_row=start_row, pk_cols=pk_cols
+            )
+            return
+
+        self._check_primary_key_integrity_chunks(
+            df=df, start_row=start_row, pk_cols=pk_cols
+        )
+
+    def _check_primary_key_integrity_no_chunks(
+        self, df: DataFrame, start_row: int, pk_cols: list[str]
+    ) -> None:
+        pk_cols_df = self._resolve_df_cols(df, pk_cols)
+        pk_frame = df[pk_cols_df]
+
+        # Keep progress label for consistency with chunked path
+        self.__begin_step(step="Creating primary key hashes")
+        self.__complete_step()
+
+        self.__begin_step(step="Checking for primary key nulls")
+        null = pk_frame.isna().any(axis=1)
+        non_null = ~null
+        if null.any():
+            self._save_issues(IssueType.PK_NULL, None, null, start_row)
+        self.__complete_step()
+
+        self.__begin_step(step="Checking for primary key collision")
+        in_chunk_collision = non_null.copy()
+        if non_null.any():
+            in_chunk_local = pk_frame.loc[non_null].duplicated(keep=False)
+            in_chunk_collision.loc[non_null] = in_chunk_local
+        if in_chunk_collision.any():
+            self._save_issues(
+                IssueType.PK_COLLISION, None, in_chunk_collision, start_row
+            )
+        self.__complete_step()
+
+        # Keep progress label for consistency with chunked path
+        self.__begin_step(step="Caching primary keys")
+        self.__complete_step()
+
+    def _check_primary_key_integrity_chunks(
+        self, df: DataFrame, start_row: int, pk_cols: list[str]
+    ) -> None:
         # Create primary key hashes
         self.__begin_step(step="Creating primary key hashes")
-        pk_hashes = create_pk_hashes(df[pk_cols])
+        pk_cols_df = self._resolve_df_cols(df, pk_cols)
+        pk_hashes = create_pk_hashes(df[pk_cols_df])
+
         self.__complete_step()
 
         # Primary Key Nulls
@@ -353,13 +472,7 @@ class Validator:
         pk_hashes_non_null = pk_hashes[non_null]
 
         if null.any():
-            self.issues.add(
-                IssueType.PK_NULL,
-                table=self.table_name,
-                column=None,
-                ranges=mask_to_ranges(null, start_row),
-                parent=self.dataset_item,
-            )
+            self._save_issues(IssueType.PK_NULL, None, null, start_row)
         self.__complete_step()
 
         # 2) In-chunk collisions
@@ -389,22 +502,14 @@ class Validator:
 
         # 7) Emit in-chunk collisions Issues
         if in_chunk_collision.any():
-            self.issues.add(
-                IssueType.PK_COLLISION,
-                table=self.table_name,
-                column=None,
-                ranges=mask_to_ranges(in_chunk_collision, start_row),
-                parent=self.dataset_item,
+            self._save_issues(
+                IssueType.PK_COLLISION, None, in_chunk_collision, start_row
             )
 
         # 7) Emit cross-chunk collisions Issues
         if cross_chunk_collision.any():
-            self.issues.add(
-                IssueType.PK_COLLISION,
-                table=self.table_name,
-                column=None,
-                ranges=mask_to_ranges(cross_chunk_collision, start_row),
-                parent=self.dataset_item,
+            self._save_issues(
+                IssueType.PK_COLLISION, None, cross_chunk_collision, start_row
             )
 
             # Add the original PK row as a collision
@@ -415,7 +520,7 @@ class Validator:
                         IssueType.PK_COLLISION,
                         table=self.table_name,
                         column=None,
-                        ranges=[Range(first_row, first_row)],
+                        ranges=[Range(first_row, first_row)],  # add directly
                         parent=self.dataset_item,
                     )
                     self.tracker_pk_reported_first.add(int(h))
@@ -437,44 +542,90 @@ class Validator:
             self.__complete_step()
             return
 
-        columns = [col for col in self._dt_needs_infer if col in df.columns]
-        if not columns:
+        cols = [
+            (dict_col, df_col)
+            for dict_col in self._dt_needs_infer
+            if (df_col := self._resolve_df_col(df, dict_col)) is not None
+        ]
+        if not cols:
             self.__complete_step()
             return
 
-        for column in columns:
-            series = df[column].astype("string", copy=False).str.strip()
-            unique = series.dropna().unique()
+        from valediction.validation.helpers import _allowed_formats_for
+
+        for dict_col, df_col in cols:
+            unique = (
+                df[df_col].astype("string", copy=False).str.strip().dropna().unique()
+            )
             if len(unique) == 0:
                 continue
 
             try:
-                fmt_or_false = infer_datetime_format(Series(unique, dtype="string"))
+                fmt = infer_datetime_format(Series(unique, dtype="string"))
             except ValueError:
-                # ambiguous - try again in later chunk
                 continue
 
-            if fmt_or_false and fmt_or_false is not False:
-                col_dtype = self._find_data_type(column)
-                from valediction.validation.helpers import _allowed_formats_for
+            if not fmt or fmt is False:
+                continue
 
-                allowed = _allowed_formats_for(col_dtype)
-                if fmt_or_false in allowed:
-                    self._dt_format_cache[column] = fmt_or_false
-                    self._dt_needs_infer.discard(column)
+            col_dtype = self._find_data_type(dict_col)  # case-insensitive getter
+            if fmt not in _allowed_formats_for(col_dtype):
+                continue
 
-                    # Persist in the dictionary
-                    try:
-                        self.table_dictionary.get_column(
-                            column
-                        ).datetime_format = fmt_or_false
-                    except Exception:
-                        pass
+            self._dt_format_cache[dict_col] = fmt
+            self._dt_needs_infer.discard(dict_col)
+
+            try:
+                self.table_dictionary.get_column(dict_col).datetime_format = fmt
+            except Exception:
+                pass
+
         self.__complete_step()
+
+    def _save_issues(
+        self,
+        issue_type: IssueType,
+        column: str | None = None,
+        invalid: Series | None = None,
+        start_row: int | None = None,
+    ) -> None:
+        if invalid is not None and start_row is None:
+            raise ValueError(
+                "'start_row' must be provided when 'invalid' mask is provided"
+            )
+
+        ranges = None if invalid is None else mask_to_ranges(invalid, start_row)
+        self.issues.add(
+            issue_type=issue_type,
+            table=self.table_name,
+            column=column,
+            ranges=ranges,
+            parent=self.dataset_item,
+        )
+
+    def _check_column_types_integer(
+        self, col: str, series: Series, start_row: int, allow_bigint: bool
+    ) -> None:
+        invalid = invalid_mask_integer(series)
+        if invalid.any():
+            self._save_issues(IssueType.TYPE_MISMATCH, col, invalid, start_row)
+
+        # Check for out of range integers
+        if allow_bigint is False:
+            out_of_range = invalid_mask_integer_out_of_range(
+                series, invalid_integer_mask=invalid
+            )
+            if out_of_range.any():
+                self._save_issues(
+                    IssueType.INTEGER_OUT_OF_RANGE, col, out_of_range, start_row
+                )
 
     def _check_column_types(self, df: DataFrame, start_row: int) -> None:
         self.__begin_step(step="Checking column types")
-        present = [col for col in df.columns if col in self._column_names]
+        present = [
+            col for col in df.columns if _normalise(str(col)) in self._column_names
+        ]
+        config = get_config()
         for col in present:
             dtype = self._find_data_type(col)
             if dtype == DataType.TEXT:
@@ -482,61 +633,51 @@ class Validator:
 
             series = df[col]
             if dtype == DataType.INTEGER:
-                invalid = invalid_mask_integer(series)
-            elif dtype == DataType.FLOAT:
+                self._check_column_types_integer(
+                    col, series, start_row, config.allow_bigint
+                )
+                continue
+
+            if dtype == DataType.FLOAT:
                 invalid = invalid_mask_float(series)
             elif dtype == DataType.DATE:
                 fmt = self._dt_format_cache.get(col) or self._find_datetime_format(col)
                 invalid = invalid_mask_date(series, fmt)
-            elif dtype == DataType.DATETIME:
+            elif dtype == DataType.TIMESTAMP:
                 fmt = self._dt_format_cache.get(col) or self._find_datetime_format(col)
                 invalid = invalid_mask_datetime(series, fmt)
             else:
                 continue
 
             if invalid.any():
-                self.issues.add(
-                    IssueType.TYPE_MISMATCH,
-                    table=self.table_name,
-                    column=col,
-                    ranges=mask_to_ranges(invalid, start_row),
-                    parent=self.dataset_item,
-                )
+                self._save_issues(IssueType.TYPE_MISMATCH, col, invalid, start_row)
         self.__complete_step()
 
     def _check_text_lengths(self, df: DataFrame, start_row: int) -> None:
         self.__begin_step(step="Checking text lengths")
-        present = [col for col in df.columns if col in self._column_names]
+        present = [
+            col for col in df.columns if _normalise(str(col)) in self._column_names
+        ]
         for col in present:
             if self._find_data_type(col) != DataType.TEXT:
                 continue
             max_len = self._find_max_length(col)
             invalid = invalid_mask_text_too_long(df[col], max_len)
             if invalid.any():
-                self.issues.add(
-                    IssueType.TEXT_TOO_LONG,
-                    table=self.table_name,
-                    column=col,
-                    ranges=mask_to_ranges(invalid, start_row),
-                    parent=self.dataset_item,
-                )
+                self._save_issues(IssueType.TEXT_TOO_LONG, col, invalid, start_row)
         self.__complete_step()
 
     def _check_text_forbidden_chars(self, df: DataFrame, start_row: int) -> None:
         self.__begin_step(step="Checking for forbidden characters")
-        present = [col for col in df.columns if col in self._column_names]
+        present = [
+            col for col in df.columns if _normalise(str(col)) in self._column_names
+        ]
         for col in present:
             if self._find_data_type(col) != DataType.TEXT:
                 continue
             mask = invalid_mask_text_forbidden_characters(df[col])
             if mask.any():
-                self.issues.add(
-                    IssueType.FORBIDDEN_CHARACTER,
-                    table=self.table_name,
-                    column=col,
-                    ranges=mask_to_ranges(mask, start_row),
-                    parent=self.dataset_item,
-                )
+                self._save_issues(IssueType.FORBIDDEN_CHARACTER, col, mask, start_row)
         self.__complete_step()
 
     # Validation: Final Helpers
@@ -544,12 +685,7 @@ class Validator:
         self.__begin_step(step="Checking for fully null columns")
         for column, seen in self.tracker_seen_non_nulls.items():
             if not seen:
-                self.issues.add(
-                    issue_type=IssueType.FULLY_NULL_COLUMN,
-                    table=self.table_name,
-                    column=column,
-                    parent=self.dataset_item,
-                )
+                self._save_issues(IssueType.FULLY_NULL_COLUMN, column)
         self.__complete_step()
 
     # Progress Helpers

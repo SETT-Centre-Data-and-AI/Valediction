@@ -1,0 +1,27 @@
+name: Sync from Public
+
+on:
+  workflow_dispatch:
+    inputs:
+      public_branch:
+        description: Name of branch in PUBLIC repo to sync from
+        type: string
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  load-identity:
+    name: Load Identity
+    uses: ./.github/workflows/config.yaml
+
+  sync-from-public:
+    needs: load-identity
+    uses: SETT-Centre-Data-and-AI/workflows/.github/workflows/sync-from-public.yaml@release
+    with:
+      public_branch: ${{ github.event.inputs.public_branch }}
+      private-repo: ${{ needs.load-identity.outputs.private-repo }}
+      public-repo: ${{ needs.load-identity.outputs.public-repo }}
+    secrets: inherit

@@ -11,7 +11,7 @@ import pandas as pd
 from pandas import DataFrame
 from pandas.errors import ParserError
 
-from valediction.support import _normalise_name
+from valediction.support import _strip
 
 
 class FrameChunk(NamedTuple):
@@ -34,7 +34,7 @@ class FrameChunk(NamedTuple):
     total_chunks_seen: int | None
 
     def estimate_chunk_count(self) -> int:
-        # Buffers (accounting for CSV tails/bytes innacuracy)
+        # Buffers (accounting for CSV tails/bytes inaccuracy)
         EPS_ABS = 4096  # Fixed
         EPS_REL = 0.05  # 5% tail buffer
 
@@ -93,7 +93,7 @@ def _post_read_processing(df: DataFrame, cfg: CsvReadConfig) -> DataFrame:
     """Apply header normalisation and vectorised value stripping after reading."""
     cfg = cfg or CsvReadConfig()
     if cfg.normalise_headers:
-        df = df.rename(columns={c: _normalise_name(c) for c in df.columns})
+        df = df.rename(columns={c: _strip(c) for c in df.columns})
     if cfg.strip_values:
         str_cols = df.select_dtypes(include=["string"]).columns
         if len(str_cols) > 0:

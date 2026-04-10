@@ -8,7 +8,7 @@ class DataType(Enum):
     INTEGER = "Integer"
     FLOAT = "Float"
     DATE = "Date"
-    DATETIME = "Datetime"
+    TIMESTAMP = "Timestamp"
     FILE = "File"
 
     def __str__(self) -> str:
@@ -32,9 +32,9 @@ class DataType(Enum):
             "number": cls.FLOAT,
             "numeric": cls.FLOAT,
             "date": cls.DATE,
-            "datetime": cls.DATETIME,
-            "datetime64": cls.DATETIME,
-            "timestamp": cls.DATETIME,
+            "datetime": cls.TIMESTAMP,
+            "datetime64": cls.TIMESTAMP,
+            "timestamp": cls.TIMESTAMP,
             "file": cls.FILE,
             "blob": cls.FILE,
             "binary": cls.FILE,
@@ -49,10 +49,10 @@ class DataType(Enum):
         return self in {DataType.TEXT}
 
     def valid_for_primary_key(self) -> bool:
-        """PKs can only be Text, Integer, Date, Datetime."""
+        """PKs can only be Text, Integer, Date, Timestamp."""
         return self in {
             DataType.TEXT,
             DataType.INTEGER,
             DataType.DATE,
-            DataType.DATETIME,
+            DataType.TIMESTAMP,
         }

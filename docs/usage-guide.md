@@ -23,7 +23,7 @@ Valediction runs a number of checks to enforce data integrity. Some of these are
  - **Invalid column/table name patterns**: regex for invalid characters in names (default = numbers/characters/underscores only)
  - **Null values**: case-inensitive values to interpret as nulls during validation (default = "", "null", "none")
  - **Forbidden characters**: characters disallowed in values (default = no characters forbidden)
- - **Date Formats**: acceptable date formats, and their classification as DATE or DATETIME
+ - **Date Formats**: acceptable date formats, and their classification as DATE or TIMESTAMP
 
 These can be accessed and amended to set new global defaults - for example to allow longer table/column names:
 
@@ -210,7 +210,7 @@ Data dictionaries can be manually created in Python, allowing a user to set tabl
  - name
  - description
  - order (in table)
- - data_type (text, integer, float, date, or datetime)
+ - data_type (text, integer, float, date, or timestamp)
  - length (if text)
  - primary_key (numeric order within key)
  - enumerations (as a dict of code: value pairs)
@@ -348,9 +348,11 @@ dataset.check()
 
 Validation arguments are as follows:
  - `feedback`: turn off progress for small performance improvement
- - `chunk_size`: where the `Dataset` contains items pointing to a `Path`, validate the data in chunks to optimise RAM
+ - `chunk_size`: where the `Dataset` contains items pointing to a `Path`, validate the data in chunks to optimise RAM (note: Valediction may run significantly faster when feeding `chunk_size=None`, as primary key hashing/cacheing across chunks is bypassed)
 
 Validation runtimes can be explored by calling `dataset['table_name'].validation_runtimes`
+
+**Note**: When RAM constraints do not apply, Valediction should run significantly faster when not chunking validation (i.e. first running `dataset.import_data()` or setting `chunk_size=None`). This is because primary key values do not need to be hashed and cached for comparison across chunks. Instead, Valediction will use vectorised checking for duplicates. 
 
 
 ## 🐞 Issue Inspection <a id="issue_inspection"></a>
@@ -487,7 +489,7 @@ Dataset(len=4, dictionary_loaded=True,
 )
 ```
 ## 🤖 Convenience <a id="convenience"></a>
-For convenience, the entire validation process can be run in a single line with a function that wraps around the class creation methods. A dataset (folder or `dict` of _name: `DataFrame`_ pairs) can be provided alongside the dictionary (`Dictionary` or dictionary filepath).
+For convenience, the entire validation process can be run in a single line with a `validate()` function that wraps around the class creation methods. A dataset (folder or `dict` of _name: `DataFrame`_ pairs) can be provided alongside the dictionary (`Dictionary` or dictionary filepath).
 
 ```python
 import valediction as vale
