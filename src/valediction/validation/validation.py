@@ -682,11 +682,13 @@ class Validator:
 
     # Validation: Final Helpers
     def _check_for_fully_null_column(self):
-        self.__begin_step(step="Checking for fully null columns")
-        for column, seen in self.tracker_seen_non_nulls.items():
-            if not seen:
-                self._save_issues(IssueType.FULLY_NULL_COLUMN, column)
-        self.__complete_step()
+        config = get_config()
+        if config.enforce_no_null_columns:
+            self.__begin_step(step="Checking for fully null columns")
+            for column, seen in self.tracker_seen_non_nulls.items():
+                if not seen:
+                    self._save_issues(IssueType.FULLY_NULL_COLUMN, column)
+            self.__complete_step()
 
     # Progress Helpers
     def __progress_init(self) -> None:

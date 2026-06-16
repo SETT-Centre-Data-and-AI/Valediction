@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import re
 import warnings
+from collections.abc import Callable
 
 import pandas as pd
-from pandas.api.types import is_object_dtype, is_string_dtype
+from pandas.api.types import is_datetime64_any_dtype, is_object_dtype, is_string_dtype
 
 from valediction.data_types.data_type_helpers import infer_datetime_format
 from valediction.data_types.data_types import DataType
 from valediction.integrity import get_config
 from valediction.progress import Progress
+from valediction.validation.helpers import invalid_mask_integer_out_of_range
 
 # ---------- compiled patterns ----------
 _INT_RE = re.compile(r"^[+-]?\d+$")
@@ -19,6 +21,7 @@ _FLOAT_RE = re.compile(r"^[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?$")
 _INT_EQ_RE = re.compile(r"^[+-]?\d+(?:\.0*)?$")
 _LEAD0_RE = re.compile(r"^[+-]?0\d+$")
 _DATE_HINT_RE = re.compile(r"[-/T]")  # cheap prefilter
+_TZ_HINT_RE = re.compile(r"(?:[zZ]|[+-]\d{2}:?\d{2})\s*$")
 COLUMN_STEPS = 8
 
 
@@ -74,7 +77,7 @@ class TypeInferer:
         *,
         dayfirst: bool,
         debug: bool = False,
-        progress: Progress = None,
+        progress: Progress | None = None,
     ) -> None:
         config = get_config()
         self.dayfirst = dayfirst
@@ -82,7 +85,7 @@ class TypeInferer:
         self.null_tokens = {v.strip().lower() for v in config.null_values}
         self.states: dict[str, ColumnState] = {}
         self.debug = debug
-        self.progress: Progress = progress
+        self.progress: Progress | None = progress
         self.__current_column: str | None = None
 
     # Inference
@@ -121,7 +124,7 @@ class TypeInferer:
                 continue
 
             # State-specific handling
-            _handling_function: callable = {
+            _handling_function: Callable = {
                 DataType.TEXT: self._handle_state_text,
                 DataType.DATE: self._handle_state_date,
                 DataType.TIMESTAMP: self._handle_state_datetime,
@@ -235,7 +238,7 @@ class TypeInferer:
     def _handle_state_text(self, st: ColumnState, nn: pd.Series) -> None:
         self.__begin_step(step="Handling text")
         # DATETIME attempt
-        if not st.disqualify_datetime and self._looks_dateish(nn):
+        if not st.disqualify_datetime and self._looks_dateish(nn):  # noqa: SIM102
             if self._try_parse_datetime_then_cache(st, nn):
                 self.__complete_step()
                 return
@@ -246,6 +249,16 @@ class TypeInferer:
             float_like = nn.str.fullmatch(_FLOAT_RE, na=False)
 
             if int_equiv.all():
+                if self._integer_values_out_of_range(nn, int_equiv).any():
+                    self._debug_offenders_bigint(st, nn)
+                    st.disqualify_numeric = True
+                    st.lock_text_permanent = True
+                    self._transition(
+                        st, DataType.TEXT, "integer values exceed bigint range"
+                    )
+                    self.__complete_step()
+                    return
+
                 self._transition(st, DataType.INTEGER, "all integer-equivalent")
                 self.__complete_step()
                 return
@@ -314,6 +327,14 @@ class TypeInferer:
         self.__begin_step(step="Handling integers")
         int_equiv = nn.str.fullmatch(_INT_EQ_RE, na=False)
         float_like = nn.str.fullmatch(_FLOAT_RE, na=False)
+
+        if self._integer_values_out_of_range(nn, int_equiv).any():
+            self._debug_offenders_bigint(st, nn)
+            st.disqualify_numeric = True
+            st.lock_text_permanent = True
+            self._transition(st, DataType.TEXT, "integer values exceed bigint range")
+            self.__complete_step()
+            return
 
         if not (int_equiv | float_like).all():
             self._debug_offenders_numeric(st, nn, int_equiv, float_like)
@@ -401,28 +422,51 @@ class TypeInferer:
         st.disqualify_datetime = True
         return False
 
+    def _integer_values_out_of_range(
+        self, nn: pd.Series, int_equiv: pd.Series
+    ) -> pd.Series:
+        if get_config().allow_bigint:
+            return nn.isna() & False
+
+        return invalid_mask_integer_out_of_range(nn, invalid_integer_mask=~int_equiv)
+
     def _parse_with_cached_format(
         self, s: pd.Series, fmt: str
     ) -> tuple[pd.Series, pd.Series]:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            parsed = pd.to_datetime(s, format=fmt, errors="coerce", utc=False)
-
-        ok = parsed.notna()
-        has_time = ok & (
-            (parsed.dt.hour != 0)
-            | (parsed.dt.minute != 0)
-            | (parsed.dt.second != 0)
-            | (parsed.dt.microsecond != 0)
-        )
-        return ok, has_time
+        return self._parse_datetime_to_masks(s, fmt=fmt)
 
     def _datetime_parse_ok(self, s: pd.Series) -> tuple[pd.Series, pd.Series]:
+        return self._parse_datetime_to_masks(s)
+
+    def _parse_datetime_to_masks(
+        self, s: pd.Series, fmt: str | None = None
+    ) -> tuple[pd.Series, pd.Series]:
+        false_mask = pd.Series(False, index=s.index)
+        utc = self._format_has_timezone(fmt) or self._has_timezone_hint(s)
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            parsed = pd.to_datetime(
-                s, errors="coerce", dayfirst=self.dayfirst, utc=False
-            )
+            warnings.simplefilter("ignore", FutureWarning)
+            try:
+                if fmt is None:
+                    parsed = pd.to_datetime(
+                        s,
+                        errors="coerce",
+                        dayfirst=self.dayfirst,
+                        utc=utc,
+                    )
+                else:
+                    parsed = pd.to_datetime(
+                        s,
+                        format=fmt,
+                        errors="coerce",
+                        utc=utc,
+                    )
+            except Exception:
+                return false_mask, false_mask.copy()
+
+        if not is_datetime64_any_dtype(parsed):
+            return false_mask, false_mask.copy()
 
         ok = parsed.notna()
         has_time = ok & (
@@ -432,6 +476,15 @@ class TypeInferer:
             | (parsed.dt.microsecond != 0)
         )
         return ok, has_time
+
+    @staticmethod
+    def _format_has_timezone(fmt: str | None) -> bool:
+        return bool(fmt and ("%z" in fmt or "%Z" in fmt or "Z" in fmt))
+
+    @staticmethod
+    def _has_timezone_hint(s: pd.Series) -> bool:
+        values = s.astype("string", copy=False).str.strip()
+        return bool(values.str.contains(_TZ_HINT_RE, na=False).any())
 
     # Debug/Log
     def __say(self, *values: object, sep: str = " ", end: str = "\n") -> None:
@@ -502,6 +555,21 @@ class TypeInferer:
         examples = self._fmt_examples(vc, max_examples=max_examples)
         self.__say(f"[{st.name}] datetime disqualified. Examples {examples}")
 
+    def _debug_offenders_bigint(
+        self,
+        st: ColumnState,
+        nn: pd.Series,
+        *,
+        max_examples: int = 5,
+    ) -> None:
+        if not self.debug:
+            return
+        vc = nn.value_counts(dropna=False)
+        examples = self._fmt_examples(vc, max_examples=max_examples)
+        self.__say(
+            f"[{st.name}] integer disqualified: values exceed bigint range. Examples {examples}"
+        )
+
     def _debug_leading_zero_examples(
         self,
         st: ColumnState,
@@ -549,5 +617,5 @@ class TypeInferer:
             step=step, alt_postfix=f"{self.__current_column}: {step}"
         )
 
-    def __complete_step(self, n: int = 1, save_as: str = None):
+    def __complete_step(self, n: int = 1, save_as: str | None = None):
         self.progress.complete_step(n=n, save_as=save_as)

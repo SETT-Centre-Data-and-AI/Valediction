@@ -1,7 +1,10 @@
 import pytest
+from pandas import DataFrame
 
+from valediction.data_types.data_types import DataType
 from valediction.datasets.datasets import Dataset
 from valediction.demo import DEMO_DATA, demo_dictionary
+from valediction.integrity import Config
 
 DICT_NAME = "TEST"
 
@@ -39,6 +42,47 @@ def test_generate_dictionary(feedback) -> None:
 
     assert dictionary
     assert len(dictionary) == 4
+
+
+def test_generate_dictionary_with_mixed_timezone_timestamps(debug) -> None:
+    df = DataFrame(
+        {
+            "ID": ["1", "2", "3"],
+            "OBS_TIMESTAMP": [
+                "2021-11-27T16:56:00+00:00",
+                "2021-06-27T17:56:00+01:00",
+                "2021-11-28T08:15:00+00:00",
+            ],
+        }
+    )
+    dataset = Dataset.create_from({"OBSERVATIONS": df})
+
+    dictionary = dataset.generate_dictionary(
+        dictionary_name=DICT_NAME,
+        feedback=False,
+        debug=debug,
+    )
+    timestamp_column = dictionary.get_table("OBSERVATIONS").get_column("OBS_TIMESTAMP")
+
+    assert timestamp_column.data_type is DataType.TIMESTAMP
+    assert timestamp_column.datetime_format == "%Y-%m-%dT%H:%M:%S%z"
+
+
+def test_generate_dictionary_respects_bigint_limit() -> None:
+    df = DataFrame({"BIGS": [2147483648, 2147483649]})
+    dataset = Dataset.create_from({"BIG_TABLE": df})
+
+    with Config() as config:
+        config.allow_bigint = False
+        dictionary = dataset.generate_dictionary(
+            dictionary_name=DICT_NAME,
+            feedback=False,
+        )
+
+    column = dictionary.get_table("BIG_TABLE").get_column("BIGS")
+
+    assert column.data_type is DataType.TEXT
+    assert column.length == len("2147483649")
 
 
 def test_generated_dictionary_integrity(feedback) -> None:

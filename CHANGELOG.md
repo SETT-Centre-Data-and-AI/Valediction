@@ -1,3 +1,26 @@
+## v1.7.5 (2026-06-16)
+
+### Feat
+
+- **bigint**: allow_bigint behaviour adhered to when generating dictionary as well as validating
+
+## v1.7.4 (2026-06-16)
+
+### Fix
+
+- **config**: set enforce_no_null_columns to False by default
+- **issues**: update return types for better clarity and type checking
+- **validation**: conditionally check for fully null columns based on config
+- **type_inference, datasets, progress**: add type hints for better clarity and type checking
+- **dev_dependencies**: add types-tqdm to development dependencies
+- **dependencies**: update package versions
+
+## v1.7.3 (2026-05-26)
+
+### Fix
+
+- **dictionary_generation**: fix for timezone-aware datetimes
+
 ## v1.7.2 (2026-03-24)
 
 ## v1.7.1 (2026-03-23)

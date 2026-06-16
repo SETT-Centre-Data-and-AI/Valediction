@@ -118,7 +118,7 @@ class Progress:
         self.bar.total = new_total
         self._refresh()
 
-    def begin_step(self, step: str, alt_postfix: str = None) -> None:
+    def begin_step(self, step: str, alt_postfix: str | None = None) -> None:
         self.step_start = datetime.now()
         self.current_step = step
         postfix = alt_postfix or self.current_step
@@ -128,7 +128,7 @@ class Progress:
             self._refresh()
 
     def complete_step(
-        self, n: int = 1, from_time: datetime = None, save_as: str = None
+        self, n: int = 1, from_time: datetime | None = None, save_as: str | None = None
     ) -> None:
         step = save_as or self.current_step
         runtime = calculate_runtime(start=from_time or self.step_start)
@@ -143,8 +143,8 @@ class Progress:
     def finish(
         self,
         postfix: str | None = "Completed",
-        save_as: str = "Total",
-        good: bool = None,
+        save_as: str | None = "Total",
+        good: bool | None = None,
     ) -> None:
         self.complete_step(n=0, from_time=self.full_start, save_as=save_as)
 
@@ -187,7 +187,7 @@ class Progress:
 
         self.bar.refresh()
 
-    def _tick(self, n: int = 1):
+    def _tick(self, n: int = 1) -> None:
         self.completed_steps += n
         if not self.enabled:
             return
