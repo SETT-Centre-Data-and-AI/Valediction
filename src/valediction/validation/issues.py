@@ -114,7 +114,7 @@ class Issue:
         additional_columns: bool | str | list[str] | None = None,
         chunk_size: int = 1_000_000,
         print_header: bool = True,
-    ) -> DataFrame | str:
+    ) -> DataFrame | str | None:
         """
         Summary:
             Inspect an issue in the dataset by returning a DataFrame containing the relevant values.
@@ -183,7 +183,7 @@ class Issue:
         return out if columns is None else out.loc[:, columns]
 
     # Inspect Helpers
-    def __guard_parent(self):
+    def __guard_parent(self) -> None:
         if not self.parent:
             raise ValueError("Issue has no parent DatasetItem")
 
@@ -229,7 +229,7 @@ class Issues:
     def __bool__(self) -> bool:
         return bool(self._items)
 
-    def __getitem__(self, idx) -> Issue | list[Issue]:
+    def __getitem__(self, idx: int) -> Issue | list[Issue]:
         return self._items[idx]
 
     def __repr__(self) -> str:

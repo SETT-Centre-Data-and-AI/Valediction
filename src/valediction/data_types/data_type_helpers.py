@@ -4,6 +4,10 @@ from valediction.data_types.data_types import DataType
 from valediction.integrity import get_config
 
 
+def _format_has_timezone(datetime_format: str) -> bool:
+    return "%z" in datetime_format or "%Z" in datetime_format or "Z" in datetime_format
+
+
 def infer_datetime_format(
     series: Series,
     slice_sample_size: int = 100,
@@ -40,7 +44,12 @@ def infer_datetime_format(
         valid_formats: list[str] = []
         for fmt in remaining:
             try:
-                to_datetime(sample, format=fmt, errors="raise")
+                to_datetime(
+                    sample,
+                    format=fmt,
+                    errors="raise",
+                    utc=_format_has_timezone(fmt),
+                )
                 valid_formats.append(fmt)
             except Exception:
                 pass

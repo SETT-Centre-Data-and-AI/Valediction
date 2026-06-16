@@ -89,7 +89,7 @@ class Config:
             "%Y-%m-%dT%H:%M:%SZ": DataType.TIMESTAMP,
             "%Y-%m-%dT%H:%M:%S.%fZ": DataType.TIMESTAMP,
         }
-        self.enforce_no_null_columns: bool = True
+        self.enforce_no_null_columns: bool = False
         self.enforce_primary_keys: bool = True
         self.allow_bigint: bool = True
         self.pk_col_max_length: int = 0

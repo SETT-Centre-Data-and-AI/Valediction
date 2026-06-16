@@ -90,6 +90,7 @@ def test_validate_default_nulls_raises():
 
     config = get_config()
     config.null_values = OPTIONS
+    config.enforce_no_null_columns = True
 
     dataset = build_dataset()
     dataset.import_data()

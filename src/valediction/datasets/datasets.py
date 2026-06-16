@@ -855,10 +855,10 @@ class Dataset(list[DatasetItem]):
             raise KeyError(f"No DatasetItem with name '{key}'.")
         return found
 
-    def _dd_loaded(self):
+    def _dd_loaded(self) -> bool:
         return self.dictionary is not None
 
-    def _attach_table_dictionaries(self):
+    def _attach_table_dictionaries(self) -> None:
         for dataset_item in self:
             table_name = dataset_item.name
             table_dictionary = self.dictionary.get_table(table_name)

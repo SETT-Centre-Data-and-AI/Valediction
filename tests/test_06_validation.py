@@ -111,6 +111,8 @@ def test_validation_raises_missing_column(chunk_size):
 
 
 def test_validation_raises_fully_null_column(chunk_size):
+    config = get_config()
+    config.enforce_no_null_columns = True
     dataset = create_dataset_imported()
 
     # Change the final column to nulls
@@ -130,7 +132,10 @@ def test_validation_raises_fully_null_column(chunk_size):
 
 
 def test_validation_raises_fully_null_column_with_default_null_mixture(chunk_size):
-    null_values = get_config().null_values
+    config = get_config()
+    config.enforce_no_null_columns = True
+    
+    null_values = config.null_values
     dataset = create_dataset_imported()
 
     # Change the final column to a mixture of nulls
