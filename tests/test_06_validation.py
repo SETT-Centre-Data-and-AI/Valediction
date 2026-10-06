@@ -1,15 +1,17 @@
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from valediction.convenience import validate
 from valediction.data_types.data_types import DataType
 from valediction.datasets.datasets import Dataset
 from valediction.demo import DEMO_DATA, DEMO_DICTIONARY
+from valediction.dictionary.model import Column, Dictionary, Table
 from valediction.exceptions import DataDictionaryImportError, DataIntegrityError
-from valediction.integrity import get_config, reset_default_config
-from valediction.validation.issues import IssueType, Range
+from valediction.integrity import Config, get_config, reset_default_config
+from valediction.validation.issues import Issues, IssueType, Range
 
 
 # Parameters
@@ -46,6 +48,146 @@ def _expand_ranges(ranges: list[Range]) -> set[int]:
     for r in ranges:
         rows.update(range(r.start, r.end + 1))
     return rows
+
+
+def _calendar_dataset(tmp_path: Path, values: list, dtype: str, reader: str) -> Dataset:
+    frame = pd.DataFrame({"ID": range(1, len(values) + 1), "VALUE": values})
+    path = tmp_path / "CALENDAR.csv"
+    frame.to_csv(path, index=False)
+    dataset = Dataset.create_from({"CALENDAR": frame} if reader == "frame" else path)
+    dataset.import_dictionary(
+        Dictionary(
+            name="Calendar",
+            tables=[
+                Table(
+                    name="CALENDAR",
+                    columns=[
+                        Column(name="ID", order=1, data_type="int", primary_key=1),
+                        Column(name="VALUE", order=2, data_type=dtype),
+                    ],
+                )
+            ],
+        )
+    )
+    if reader == "import":
+        dataset.import_data()
+    return dataset
+
+
+@pytest.mark.parametrize("dtype", ["date", "timestamp"])
+@pytest.mark.parametrize("reader", ["frame", "path", "import"])
+@pytest.mark.parametrize("size", [None, 1, 2])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_calendar_conflict_reports_both_sides(
+    tmp_path: Path, dtype: str, reader: str, size: int | None, reverse: bool
+) -> None:
+    exclusive = ["22/08/2023", "08/23/2023"]
+    if reverse:
+        exclusive.reverse()
+    values = [
+        exclusive[0],
+        "01/02/2023",
+        exclusive[1],
+        "2023-08-24",
+        None,
+        "bad",
+        exclusive[0],
+    ]
+    dataset = _calendar_dataset(tmp_path, values, dtype, reader)
+    dataset.validate(feedback=False, chunk_size=size)
+    with pytest.raises(DataIntegrityError):
+        dataset.check()
+    item = dataset["CALENDAR"]
+    conflicts = item.issues.get("CALENDAR", "VALUE", IssueType.INCONSISTENT_DATE)
+    assert len(conflicts) == 1
+    assert conflicts[0].ranges == [Range(0, 0), Range(2, 2), Range(6, 6)]
+    assert conflicts[0].inspect(print_header=False)["VALUE"].tolist() == [
+        values[0],
+        values[2],
+        values[6],
+    ]
+    mismatches = item.issues.get("CALENDAR", "VALUE", IssueType.TYPE_MISMATCH)
+    assert len(mismatches) == 1
+    assert mismatches[0].ranges == [Range(5, 5)]
+    assert item.table_dictionary.get_column("VALUE").datetime_format is None
+    merged = Issues()
+    merged.extend(item.issues)
+    merged.extend(item.issues)
+    assert (
+        merged.get("CALENDAR", "VALUE", IssueType.INCONSISTENT_DATE)[0].ranges
+        == conflicts[0].ranges
+    )
+    assert "InconsistentDate" in repr(merged)
+
+
+@pytest.mark.parametrize("configured", [False, True])
+@pytest.mark.parametrize("dtype", ["date", "timestamp"])
+def test_calendar_fixed_convention_conflict_or_mismatch(
+    tmp_path: Path, configured: bool, dtype: str
+) -> None:
+    with Config() as config:
+        config.date_formats = {"%d/%m/%Y": DataType.DATE}
+        if configured:
+            config.date_formats["%m/%d/%Y"] = DataType.DATE
+        dataset = _calendar_dataset(
+            tmp_path, ["01/02/2023", "08/23/2023", None], dtype, "path"
+        )
+        item = dataset["CALENDAR"]
+        item.table_dictionary.get_column("VALUE").datetime_format = "%d/%m/%Y"
+        dataset.validate(feedback=False, chunk_size=1)
+        expected_type = (
+            IssueType.INCONSISTENT_DATE if configured else IssueType.TYPE_MISMATCH
+        )
+        assert len(item.issues) == 1
+        assert item.issues[0].type is expected_type
+        assert item.issues[0].ranges == [Range(1, 1)]
+
+
+@pytest.mark.parametrize("dtype", ["date", "timestamp"])
+@pytest.mark.parametrize("reader", ["frame", "path", "import"])
+@pytest.mark.parametrize("size", [None, 1, 2])
+@pytest.mark.parametrize("month_first", [False, True])
+@pytest.mark.parametrize("iso_format", [False, True])
+def test_calendar_late_disambiguation_survives_conversion(
+    tmp_path: Path,
+    dtype: str,
+    reader: str,
+    size: int | None,
+    month_first: bool,
+    iso_format: bool,
+) -> None:
+    values = [
+        "2023-08-24",
+        "01/02/2023",
+        None,
+        "08/23/2023" if month_first else "23/08/2023",
+    ]
+    dataset = _calendar_dataset(tmp_path, values, dtype, reader)
+    if iso_format:
+        dataset["CALENDAR"].table_dictionary.get_column(
+            "VALUE"
+        ).datetime_format = "%Y-%m-%d"
+    dataset.validate(feedback=False, chunk_size=size)
+    assert dataset.check()
+    item = dataset["CALENDAR"]
+    expected = pd.Series(
+        [
+            pd.Timestamp("2023-08-24"),
+            pd.Timestamp("2023-01-02" if month_first else "2023-02-01"),
+            pd.NaT,
+            pd.Timestamp("2023-08-23"),
+        ],
+        name="VALUE",
+    )
+    actual = pd.concat(
+        [chunk.df for chunk in item.iterate_data_chunks(1)], ignore_index=True
+    )["VALUE"]
+    pd.testing.assert_series_equal(actual, expected)
+    dataset.apply_dictionary()
+    pd.testing.assert_series_equal(item.data["VALUE"], expected)
+    dataset.validate(feedback=False)
+    assert dataset.check()
+    pd.testing.assert_series_equal(item.data["VALUE"], expected)
 
 
 # Tests
@@ -134,7 +276,7 @@ def test_validation_raises_fully_null_column(chunk_size):
 def test_validation_raises_fully_null_column_with_default_null_mixture(chunk_size):
     config = get_config()
     config.enforce_no_null_columns = True
-    
+
     null_values = config.null_values
     dataset = create_dataset_imported()
 

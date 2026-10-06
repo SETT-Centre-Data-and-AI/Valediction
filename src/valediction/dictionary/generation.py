@@ -1,6 +1,7 @@
 # valediction/dictionary/generation.py
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -17,6 +18,7 @@ from valediction.data_types.type_inference import (
 )
 from valediction.datasets.datasets_helpers import DatasetItemLike
 from valediction.dictionary.model import Column, Dictionary, Table
+from valediction.exceptions import DuplicateHeaderError
 from valediction.io.csv_readers import (
     CsvReadConfig,
     iter_csv_chunks,
@@ -24,7 +26,7 @@ from valediction.io.csv_readers import (
     read_csv_sample,
 )
 from valediction.progress import Progress
-from valediction.support import _strip, calculate_runtime
+from valediction.support import _strip, calculate_runtime, list_as_bullets
 
 IMPORTING_DATA = "Importing data"
 CHUNK_STEPS = 1
@@ -123,6 +125,7 @@ class Generator:
 
         self.__say(f"Generating dictionary for {len(items)} tables")
         for item in items:
+            self._check_for_duplicate_headers(item)
             self.__progress_init(item)
             table = Table(name=_strip(item.name))
             dictionary.add_table(table)
@@ -139,6 +142,31 @@ class Generator:
         return dictionary
 
     # Generation Helpers
+    def _check_for_duplicate_headers(self, item: DatasetItemLike) -> None:
+        if item.is_path:
+            with Path(item.data).open(
+                encoding=self.csv_cfg.encoding,
+                newline="",
+            ) as csv_file:
+                headers = next(csv.reader(csv_file), [])
+        else:
+            headers = list(item.data.columns)
+
+        seen: set[str] = set()
+        duplicates: list[str] = []
+        for header in headers:
+            effective_header = _strip(header)
+            if effective_header in seen and effective_header not in duplicates:
+                duplicates.append(effective_header)
+            seen.add(effective_header)
+
+        if duplicates:
+            duplicate_list = [header for header in duplicates]
+            raise DuplicateHeaderError(
+                f"Duplicate column headers found in table {item.name!r}: "
+                f"{list_as_bullets(duplicate_list)}"
+            )
+
     def _infer_from_csv_into_table(self, item: DatasetItemLike, table: Table) -> None:
         self.__begin_step(step=IMPORTING_DATA)
         csv_path = item.data
@@ -159,6 +187,7 @@ class Generator:
             self.__complete_step()
 
             inferer.update_with_chunk(df)
+            inferer.finalise()
             self._create_or_update_columns(table, inferer)
             return
 
@@ -211,6 +240,8 @@ class Generator:
             else:
                 self._apply_state_to_existing_columns(table, inferer, columns_by_name)
 
+        inferer.finalise()
+        self._apply_state_to_existing_columns(table, inferer, columns_by_name)
         if first_chunk:
             empty = read_csv_headers(
                 csv_path,
@@ -229,6 +260,7 @@ class Generator:
         self.__complete_step()
 
         inferer.update_with_chunk(df)
+        inferer.finalise()
         self._create_or_update_columns(table, inferer)
 
     # Emit/Update Helpers
@@ -259,8 +291,7 @@ class Generator:
     def _set_datetime_format(self, column_state: ColumnState, column: Column) -> None:
         if column.data_type in (DataType.DATE, DataType.TIMESTAMP):
             datetime_format = getattr(column_state, "cached_datetime_format", None)
-            if datetime_format and hasattr(column, "datetime_format"):
-                column.datetime_format = datetime_format
+            column.datetime_format = datetime_format
 
         else:
             if hasattr(column, "datetime_format"):

@@ -326,6 +326,60 @@ Once a `Dataset` is established and a `Dictionary` is attached, we can validate 
 * **Text lengths** - checking maximum permitted character lengths
 * **Forbidden characters** - scanning for disallowed symbols
 
+Dictionary generation, validation and `apply_dictionary` use one calendar
+interpretation per `date` or `timestamp` column. The Excel dictionary normally
+specifies the type, not a format. Valediction scans the whole column (across CSV
+chunks) before resolving day-first versus month-first. If every regional value
+remains ambiguous, `Config.date_formats` order breaks the tie; the defaults
+prefer day-first. Later unambiguous values override that provisional preference.
+Generation with `sample_rows` resolves only the sampled rows.
+
+Compatible configured representations can coexist, including ISO plus one
+regional convention, slash/hyphen spellings and full/fractional timestamps.
+Configured `date` text is accepted in `timestamp` columns and promoted to
+midnight without assigning a timezone. A selected regional `datetime_format`
+fixes that convention and takes parsing precedence. Selected timestamp formats
+also accept full ISO timestamp text with seconds, optional fractions and fixed
+offsets. Invalid dates and unconfigured representations remain `TYPE_MISMATCH`;
+non-zero time, including a single nanosecond, is never truncated into `date`.
+
+Conflicting day-first/month-first evidence makes generation fall back to `text`.
+Validation reports `IssueType.INCONSISTENT_DATE` (`"InconsistentDate"`), with
+inspectable ranges for the convention-exclusive rows on both sides of an
+inferred conflict. Ambiguous, ISO and null rows are not blamed. With a fixed
+regional format, only contrary configured-valid rows are flagged. Direct
+conversion raises `ValueError` rather than silently switching conventions.
+
+Successful scans retain a representative `Column.datetime_format` for later
+imports and independent chunk conversion. An ISO representative may be replaced
+by a regional one when regional evidence resolves the convention. This runtime
+metadata is not persisted in the Excel dictionary; reloading it requires a new
+scan.
+
+CSV export formats typed `timestamp` columns as ISO text with an explicit time,
+preserving fractional seconds up to nanoseconds and existing offsets. Typed
+`date` columns use their selected dictionary format, or ISO dates when unset.
+Export does not change the source DataFrame or dictionary. CSV preserves offsets,
+not named timezone identities; null-only chunks cannot infer an offset until a
+non-null timestamp has been seen. Mixed offsets are retained as object-dtype
+datetime values rather than forced to UTC; mixed naive/aware timestamps are not
+automatically reconciled to a common timezone.
+
+Validated `integer` columns use nullable `Int64`, including when some values are
+missing. Integer-equivalent decimal and scientific text (such as `12.0` and
+`1e2`) is converted without a float intermediary. Values outside the signed
+64-bit range and meaningful non-zero fractions are rejected; `allow_bigint=False`
+additionally enforces the signed 32-bit range. Precision already lost in a caller's
+float DataFrame cannot be recovered.
+
+Typed `float` values retain their binary floating-point precision on CSV round
+trips; conversion does not trim significant decimal digits from exported text.
+
+These guarantees concern typed values, not original CSV spelling. Existing
+whitespace stripping and configured null-token normalisation still apply,
+consistently for in-memory, full-file and chunked conversion. Export with
+validation disabled does not repair unvalidated values or infer missing types.
+
 Here we establish a `Dataset`, import & attach a `Dictionary`, validate, and check:
 
 ```python

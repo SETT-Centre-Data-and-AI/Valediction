@@ -24,6 +24,7 @@ class IssueType(Enum):
 
     # Types / content
     TYPE_MISMATCH = "TypeMismatch"
+    INCONSISTENT_DATE = "InconsistentDate"
     TEXT_TOO_LONG = "TextTooLong"
     FORBIDDEN_CHARACTER = "ForbiddenCharacter"
     INTEGER_OUT_OF_RANGE = "IntegerOutOfRange"
