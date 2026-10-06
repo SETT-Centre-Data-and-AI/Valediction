@@ -7,9 +7,7 @@ from typing import Iterator
 import numpy as np
 from pandas import DataFrame, Series
 
-from valediction.data_types.data_type_helpers import (
-    infer_datetime_format,
-)
+from valediction.data_types.data_type_helpers import _DatetimeResolver
 from valediction.data_types.data_types import DataType
 from valediction.datasets.datasets_helpers import DataLike, DatasetItemLike
 from valediction.dictionary.model import Table
@@ -26,8 +24,6 @@ from valediction.validation.helpers import (
     _column_has_values,
     _set_nulls,
     create_pk_hashes,
-    invalid_mask_date,
-    invalid_mask_datetime,
     invalid_mask_float,
     invalid_mask_integer,
     invalid_mask_integer_out_of_range,
@@ -84,8 +80,7 @@ class Validator:
         self.tracker_seen_non_nulls: dict[str, bool] = {}
         self.tracker_pk_hashes: dict[int, int] = {}
         self.tracker_pk_reported_first: set[int] = set()
-        self._dt_format_cache: dict[str, str | None] = {}
-        self._dt_needs_infer: set[str] = set()
+        self._datetime_resolvers: dict[str, _DatetimeResolver] = {}
 
         #  Helpers
         self._column_names: set[str] = {
@@ -145,19 +140,12 @@ class Validator:
         self.tracker_pk_reported_first: set[int] = set()
 
     def __import_datetime_format_cache(self) -> None:
-        self._dt_format_cache.clear()
-        self._dt_needs_infer.clear()
-
+        self._datetime_resolvers.clear()
         for column in self.table_dictionary:
-            name = column.name
-            datetime_format = column.datetime_format
-            data_type = column.data_type
-
-            if data_type in (DataType.DATE, DataType.TIMESTAMP):
-                self._dt_format_cache[name] = datetime_format
-
-                if not datetime_format:
-                    self._dt_needs_infer.add(name)
+            if column.data_type in (DataType.DATE, DataType.TIMESTAMP):
+                self._datetime_resolvers[_normalise(column.name)] = _DatetimeResolver(
+                    column.data_type, column.datetime_format
+                )
 
     # Column Scanning
     def _resolve_df_col(self, df: DataFrame, name: str) -> str | None:
@@ -209,12 +197,14 @@ class Validator:
             self._check_primary_key_integrity(df, start_row=start)
 
             # Data Type Checks
-            self._infer_datetime_formats(df)
+            self.__begin_step(step="Scanning datetime formats")
+            self.__complete_step()
             self._check_column_types(df, start_row=start)
             self._check_text_lengths(df, start_row=start)
             self._check_text_forbidden_chars(df, start_row=start)
 
         # Final Checks
+        self._finalise_datetime_formats()
         self._check_for_fully_null_column()
 
         # Finish:
@@ -536,51 +526,24 @@ class Validator:
                 self.tracker_pk_hashes.setdefault(int(h), int(r))
         self.__complete_step()
 
-    def _infer_datetime_formats(self, df: DataFrame) -> None:
-        self.__begin_step(step="Inferring datetime formats")
-        if not self._dt_needs_infer:
-            self.__complete_step()
-            return
-
-        cols = [
-            (dict_col, df_col)
-            for dict_col in self._dt_needs_infer
-            if (df_col := self._resolve_df_col(df, dict_col)) is not None
-        ]
-        if not cols:
-            self.__complete_step()
-            return
-
-        from valediction.validation.helpers import _allowed_formats_for
-
-        for dict_col, df_col in cols:
-            unique = (
-                df[df_col].astype("string", copy=False).str.strip().dropna().unique()
-            )
-            if len(unique) == 0:
+    def _finalise_datetime_formats(self) -> None:
+        for column in self.table_dictionary:
+            resolver = self._datetime_resolvers.get(_normalise(column.name))
+            if resolver is None:
                 continue
-
-            try:
-                fmt = infer_datetime_format(Series(unique, dtype="string"))
-            except ValueError:
-                continue
-
-            if not fmt or fmt is False:
-                continue
-
-            col_dtype = self._find_data_type(dict_col)  # case-insensitive getter
-            if fmt not in _allowed_formats_for(col_dtype):
-                continue
-
-            self._dt_format_cache[dict_col] = fmt
-            self._dt_needs_infer.discard(dict_col)
-
-            try:
-                self.table_dictionary.get_column(dict_col).datetime_format = fmt
-            except Exception:
-                pass
-
-        self.__complete_step()
+            ranges = resolver.conflict_ranges()
+            if ranges:
+                self.issues.add(
+                    IssueType.INCONSISTENT_DATE,
+                    self.table_name,
+                    column.name,
+                    [Range(start, end) for start, end in ranges],
+                    self.dataset_item,
+                )
+            if not resolver.conflict and not resolver.invalid:
+                column.datetime_format = (
+                    resolver.selected_format() or column.datetime_format
+                )
 
     def _save_issues(
         self,
@@ -640,12 +603,10 @@ class Validator:
 
             if dtype == DataType.FLOAT:
                 invalid = invalid_mask_float(series)
-            elif dtype == DataType.DATE:
-                fmt = self._dt_format_cache.get(col) or self._find_datetime_format(col)
-                invalid = invalid_mask_date(series, fmt)
-            elif dtype == DataType.TIMESTAMP:
-                fmt = self._dt_format_cache.get(col) or self._find_datetime_format(col)
-                invalid = invalid_mask_datetime(series, fmt)
+            elif dtype in (DataType.DATE, DataType.TIMESTAMP):
+                invalid = self._datetime_resolvers[_normalise(col)].update(
+                    series, start_row
+                )
             else:
                 continue
 

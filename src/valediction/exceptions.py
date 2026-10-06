@@ -4,6 +4,11 @@ class DataDictionaryError(Exception):
         self.message = message
 
 
+class DuplicateHeaderError(DataDictionaryError):
+    def __init__(self, message: str = "Duplicate column headers were found"):
+        super().__init__(message)
+
+
 class DataDictionaryImportError(Exception):
     def __init__(self, message: str = "A DataDictionaryImportError has occurred"):
         super().__init__(message)

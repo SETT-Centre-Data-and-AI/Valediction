@@ -1,3 +1,34 @@
+## v1.7.8 (2026-10-05)
+
+### Feat
+
+- **data_type_helpers.py**: added timezone partitioning to future-proof against Pandas' mixed timezone FutureWarning
+- **_parse_integer**: added cache limit before clearing to prevent endless cache growth while validating
+- **inconsitent_date**: new issue added to raise on conflicting dd/mm vs mm/dd types
+
+## v1.7.7 (2026-10-02)
+
+### Feat
+
+- **dates**: dates accepted as timestamp types
+
+### Fix
+
+- **io**: preserve typed values across CSV import and export
+- **timestamp**: fix for locally imported data timestamp interpretation
+
+## v1.7.6 (2026-10-02)
+
+### Feat
+
+- **dates**: dates accepted as timestamp types
+- **generation.py**: added check for duplicate headers to raise early error with message, rather than erroring on nested DataFrames
+
+### Fix
+
+- **io**: preserve typed values across CSV import and export
+- **timestamp**: fix for localled imported data timestamp interpretation
+
 ## v1.7.5 (2026-06-16)
 
 ### Feat
