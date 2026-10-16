@@ -6,14 +6,24 @@ Valediction centres on two key objects: `Dataset` and `Dictionary` objects. The 
 Note that the template `.xltx` compatible with Valediction is stored in `/valediction/dictionary/template`.
 
 ## 📚 Contents <a id="contents"></a>
-- [Configuration](#configuration)
-- [Datasets](#datasets)
-- [Data Dictionary IO](#data_dictionary_io)
-- [Data Dictionary Creation](#data_dictionary_creation)
-- [Data Validation](#data_validation)
-- [Issue Inspection](#issue_inspection)
-- [Convenience](#convenience)
-- [Full Run](#full_run)
+- [Usage Guide](#usage-guide)
+  - [📚 Contents ](#-contents-)
+  - [🧩 Configuration ](#-configuration-)
+  - [🧮 Datasets ](#-datasets-)
+    - [Creating from CSVs](#creating-from-csvs)
+    - [Importing vs Pointing](#importing-vs-pointing)
+    - [Direct Construction](#direct-construction)
+  - [🗂️ Data Dictionary IO ](#️-data-dictionary-io-)
+    - [Importing a Dictionary](#importing-a-dictionary)
+    - [Exporting a Dictionary](#exporting-a-dictionary)
+  - [📖 Data Dictionary Creation ](#-data-dictionary-creation-)
+    - [Manual Creation](#manual-creation)
+    - [Generation From a Dataset](#generation-from-a-dataset)
+  - [🦉 Data Validation ](#-data-validation-)
+  - [🐞 Issue Inspection ](#-issue-inspection-)
+  - [🤖 Convenience ](#-convenience-)
+  - [⚡ Full Run ](#-full-run-)
+    - [Kraken Integration](#kraken-integration)
 
 ## 🧩 Configuration <a id="configuration"></a>
 Valediction runs a number of checks to enforce data integrity. Some of these are configurable via a globally-defined configuration, including:
@@ -326,59 +336,17 @@ Once a `Dataset` is established and a `Dictionary` is attached, we can validate 
 * **Text lengths** - checking maximum permitted character lengths
 * **Forbidden characters** - scanning for disallowed symbols
 
-Dictionary generation, validation and `apply_dictionary` use one calendar
-interpretation per `date` or `timestamp` column. The Excel dictionary normally
-specifies the type, not a format. Valediction scans the whole column (across CSV
-chunks) before resolving day-first versus month-first. If every regional value
-remains ambiguous, `Config.date_formats` order breaks the tie; the defaults
-prefer day-first. Later unambiguous values override that provisional preference.
-Generation with `sample_rows` resolves only the sampled rows.
+For **DATE** columns, configured DATE formats and configured TIMESTAMP formats are
+accepted only when the value is a naive midnight. Non-midnight and timezone-aware
+values are reported as `TypeMismatch`. **TIMESTAMP** columns accept configured
+TIMESTAMP formats and retain the represented time and precision.
 
-Compatible configured representations can coexist, including ISO plus one
-regional convention, slash/hyphen spellings and full/fractional timestamps.
-Configured `date` text is accepted in `timestamp` columns and promoted to
-midnight without assigning a timezone. A selected regional `datetime_format`
-fixes that convention and takes parsing precedence. Selected timestamp formats
-also accept full ISO timestamp text with seconds, optional fractions and fixed
-offsets. Invalid dates and unconfigured representations remain `TYPE_MISMATCH`;
-non-zero time, including a single nanosecond, is never truncated into `date`.
-
-Conflicting day-first/month-first evidence makes generation fall back to `text`.
-Validation reports `IssueType.INCONSISTENT_DATE` (`"InconsistentDate"`), with
-inspectable ranges for the convention-exclusive rows on both sides of an
-inferred conflict. Ambiguous, ISO and null rows are not blamed. With a fixed
-regional format, only contrary configured-valid rows are flagged. Direct
-conversion raises `ValueError` rather than silently switching conventions.
-
-Successful scans retain a representative `Column.datetime_format` for later
-imports and independent chunk conversion. An ISO representative may be replaced
-by a regional one when regional evidence resolves the convention. This runtime
-metadata is not persisted in the Excel dictionary; reloading it requires a new
-scan.
-
-CSV export formats typed `timestamp` columns as ISO text with an explicit time,
-preserving fractional seconds up to nanoseconds and existing offsets. Typed
-`date` columns use their selected dictionary format, or ISO dates when unset.
-Export does not change the source DataFrame or dictionary. CSV preserves offsets,
-not named timezone identities; null-only chunks cannot infer an offset until a
-non-null timestamp has been seen. Mixed offsets are retained as object-dtype
-datetime values rather than forced to UTC; mixed naive/aware timestamps are not
-automatically reconciled to a common timezone.
-
-Validated `integer` columns use nullable `Int64`, including when some values are
-missing. Integer-equivalent decimal and scientific text (such as `12.0` and
-`1e2`) is converted without a float intermediary. Values outside the signed
-64-bit range and meaningful non-zero fractions are rejected; `allow_bigint=False`
-additionally enforces the signed 32-bit range. Precision already lost in a caller's
-float DataFrame cannot be recovered.
-
-Typed `float` values retain their binary floating-point precision on CSV round
-trips; conversion does not trim significant decimal digits from exported text.
-
-These guarantees concern typed values, not original CSV spelling. Existing
-whitespace stripping and configured null-token normalisation still apply,
-consistently for in-memory, full-file and chunked conversion. Export with
-validation disabled does not repair unvalidated values or infer missing types.
+For DATE and TIMESTAMP string values, valid unambiguous day/month dates establish
+the column's convention in row order. If later values use the opposite convention,
+validation reports `InconsistentDate` for the first convention-setting row and the
+conflicting rows. Ambiguous dates, year-first strings, and native datetime values
+do not establish a convention; invalid values remain `TypeMismatch`. This detection
+also spans CSV chunks.
 
 Here we establish a `Dataset`, import & attach a `Dictionary`, validate, and check:
 
@@ -403,6 +371,7 @@ dataset.check()
 Validation arguments are as follows:
  - `feedback`: turn off progress for small performance improvement
  - `chunk_size`: where the `Dataset` contains items pointing to a `Path`, validate the data in chunks to optimise RAM (note: Valediction may run significantly faster when feeding `chunk_size=None`, as primary key hashing/cacheing across chunks is bypassed)
+ - `fail_fast`: when `True`, stop after the first validation check that finds issues and raise `DataIntegrityError`. All offending rows found by that check are retained, but later checks, CSV chunks, and tables are skipped, so more issues may exist. Partial issues remain available on the affected `DatasetItem` or `Dataset`; the convenience `validate()` function attaches the partial dataset to the exception. Defaults to `False`, which preserves exhaustive issue collection without raising from `validate()`.
 
 Validation runtimes can be explored by calling `dataset['table_name'].validation_runtimes`
 
@@ -543,7 +512,15 @@ Dataset(len=4, dictionary_loaded=True,
 )
 ```
 ## 🤖 Convenience <a id="convenience"></a>
-For convenience, the entire validation process can be run in a single line with a `validate()` function that wraps around the class creation methods. A dataset (folder or `dict` of _name: `DataFrame`_ pairs) can be provided alongside the dictionary (`Dictionary` or dictionary filepath).
+For convenience, `create_dataset()` can be used to quickly establish a `Dataset` with a dictionary optionally attached.
+```python
+import valediction as vale
+from valediction import demo
+
+dataset = vale.create_dataset(data=demo.DEMO_DATA, dictionary=demo.DEMO_DICTIONARY)
+```
+
+For extra convenience, the entire validation process can be run in a single line with a `validate()` function that wraps around the class creation methods. A dataset (folder or `dict` of _name: `DataFrame`_ pairs) can be provided alongside the dictionary (`Dictionary` or dictionary filepath).
 
 ```python
 import valediction as vale

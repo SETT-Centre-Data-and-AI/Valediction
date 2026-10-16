@@ -187,7 +187,6 @@ class Generator:
             self.__complete_step()
 
             inferer.update_with_chunk(df)
-            inferer.finalise()
             self._create_or_update_columns(table, inferer)
             return
 
@@ -240,8 +239,6 @@ class Generator:
             else:
                 self._apply_state_to_existing_columns(table, inferer, columns_by_name)
 
-        inferer.finalise()
-        self._apply_state_to_existing_columns(table, inferer, columns_by_name)
         if first_chunk:
             empty = read_csv_headers(
                 csv_path,
@@ -260,7 +257,6 @@ class Generator:
         self.__complete_step()
 
         inferer.update_with_chunk(df)
-        inferer.finalise()
         self._create_or_update_columns(table, inferer)
 
     # Emit/Update Helpers
@@ -291,7 +287,8 @@ class Generator:
     def _set_datetime_format(self, column_state: ColumnState, column: Column) -> None:
         if column.data_type in (DataType.DATE, DataType.TIMESTAMP):
             datetime_format = getattr(column_state, "cached_datetime_format", None)
-            column.datetime_format = datetime_format
+            if datetime_format and hasattr(column, "datetime_format"):
+                column.datetime_format = datetime_format
 
         else:
             if hasattr(column, "datetime_format"):

@@ -145,6 +145,7 @@ class Progress:
         postfix: str | None = "Completed",
         save_as: str | None = "Total",
         good: bool | None = None,
+        complete: bool = True,
     ) -> None:
         self.complete_step(n=0, from_time=self.full_start, save_as=save_as)
 
@@ -157,6 +158,9 @@ class Progress:
             + f"{'' if good is None else RESET}"
         )
         self._set_postfix(postfix)
+        if not complete:
+            return
+
         completed_steps = int(getattr(self.bar, "n", 0))
         if completed_steps <= 0:
             self.bar.total = 1
