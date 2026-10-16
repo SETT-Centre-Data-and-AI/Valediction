@@ -63,6 +63,9 @@ dataset.check()
 ```
 
 # 🧠 Function Quicklist
+### Convenience
+ `create_dataset()` - establish a `Dataset` from a CSV file/folder or a dictionary mapping table names to `DataFrame`s, and optionally attach a dictionary
+
 ### Dictionaries
 * `import_dictionary()` - load an `.xlsx` data dictionary into a Python Dictionary object
 * `export_dictionary()` - export a Dictionary to `.xlsx` 

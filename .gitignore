@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 tests/outputs
+tests/reports/
 .ruff_cache
 .pytest_cache
 
@@ -62,6 +63,7 @@ venv.bak/
 # Project Specific
 notebooks/
 exports/
+planning/
 
 # Project Keep
 !src/valediction/dictionary/template/PROJECT - Data Dictionary.xltx

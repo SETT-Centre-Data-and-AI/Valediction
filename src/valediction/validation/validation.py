@@ -6,8 +6,11 @@ from typing import Iterator
 
 import numpy as np
 from pandas import DataFrame, Series
+from pandas.api.types import is_datetime64_any_dtype
 
-from valediction.data_types.data_type_helpers import _DatetimeResolver
+from valediction.data_types.data_type_helpers import (
+    infer_datetime_format,
+)
 from valediction.data_types.data_types import DataType
 from valediction.datasets.datasets_helpers import DataLike, DatasetItemLike
 from valediction.dictionary.model import Table
@@ -21,9 +24,14 @@ from valediction.io.csv_readers import (
 from valediction.progress import Progress
 from valediction.support import _get_runtime_string, _normalise, calculate_runtime
 from valediction.validation.helpers import (
+    _allowed_formats_for,
     _column_has_values,
+    _date_order_masks,
+    _primary_key_text_columns_over_length_limit,
     _set_nulls,
     create_pk_hashes,
+    invalid_mask_date,
+    invalid_mask_datetime,
     invalid_mask_float,
     invalid_mask_integer,
     invalid_mask_integer_out_of_range,
@@ -61,6 +69,7 @@ class Validator:
         table_dictionary: Table,
         feedback: bool = True,
         chunk_size: int | None = 10_000_000,
+        fail_fast: bool = False,
         _padding: int = 0,
     ):
         # User Variables
@@ -69,6 +78,7 @@ class Validator:
         self.table_dictionary: Table = table_dictionary
         self.chunk_size: int = chunk_size
         self.feedback: bool = feedback
+        self.fail_fast: bool = fail_fast
         self._padding: int = _padding
 
         # Config
@@ -80,7 +90,11 @@ class Validator:
         self.tracker_seen_non_nulls: dict[str, bool] = {}
         self.tracker_pk_hashes: dict[int, int] = {}
         self.tracker_pk_reported_first: set[int] = set()
-        self._datetime_resolvers: dict[str, _DatetimeResolver] = {}
+        self._dt_format_cache: dict[str, str | None] = {}
+        self._dt_needs_infer: set[str] = set()
+        self._date_orders: dict[str, str] = {}
+        self._date_order_anchor_rows: dict[str, int] = {}
+        self._date_order_issue_created: set[str] = set()
 
         #  Helpers
         self._column_names: set[str] = {
@@ -140,12 +154,19 @@ class Validator:
         self.tracker_pk_reported_first: set[int] = set()
 
     def __import_datetime_format_cache(self) -> None:
-        self._datetime_resolvers.clear()
+        self._dt_format_cache.clear()
+        self._dt_needs_infer.clear()
+
         for column in self.table_dictionary:
-            if column.data_type in (DataType.DATE, DataType.TIMESTAMP):
-                self._datetime_resolvers[_normalise(column.name)] = _DatetimeResolver(
-                    column.data_type, column.datetime_format
-                )
+            name = column.name
+            datetime_format = column.datetime_format
+            data_type = column.data_type
+
+            if data_type in (DataType.DATE, DataType.TIMESTAMP):
+                self._dt_format_cache[name] = datetime_format
+
+                if not datetime_format:
+                    self._dt_needs_infer.add(name)
 
     # Column Scanning
     def _resolve_df_col(self, df: DataFrame, name: str) -> str | None:
@@ -174,44 +195,62 @@ class Validator:
         """
         self.__progress_init()
         first_chunk = True
+        stopped_early = False
 
         for chunk in self.__iterate_data_chunks(
             self.data, self.chunk_size, self.csv_cfg
         ):
-            df = chunk.df
-            start = chunk.start
-
-            # First Chunk Only
-            if first_chunk:
-                _ = self._check_for_missing_columns(df)
-                _ = self._check_for_extra_columns(df)
-                first_chunk = False
-
-            # Remove Nulls
-            df = self._set_nulls(df)
-
-            # Structural Checks
-            self._check_for_column_nulls(df)
-            self._check_primary_key_whitespace(df, start_row=start)
-            self._check_primary_key_text_lengths(df, start_row=start)
-            self._check_primary_key_integrity(df, start_row=start)
-
-            # Data Type Checks
-            self.__begin_step(step="Scanning datetime formats")
-            self.__complete_step()
-            self._check_column_types(df, start_row=start)
-            self._check_text_lengths(df, start_row=start)
-            self._check_text_forbidden_chars(df, start_row=start)
+            stopped_early = self._validate_chunk(chunk, first_chunk)
+            first_chunk = False
+            if stopped_early:
+                break
 
         # Final Checks
-        self._finalise_datetime_formats()
-        self._check_for_fully_null_column()
+        if not stopped_early:
+            self._check_for_fully_null_column()
 
         # Finish:
         self.__reset_pk_trackers()
-        self.__finish_validation()
+        self.__finish_validation(stopped_early=stopped_early)
         if self.issues:
+            if stopped_early:
+                message = (
+                    "Fail-fast validation stopped after the first check that found "
+                    "issues; more issues may exist.\n"
+                    f"{self.issues}"
+                )
+                raise DataIntegrityError(message)
             raise DataIntegrityError(self.issues)
+
+    def _validate_chunk(self, chunk: FrameChunk, first_chunk: bool) -> bool:
+        df = chunk.df
+        start = chunk.start
+
+        if first_chunk:
+            self._check_for_missing_columns(df)
+            if self.fail_fast and self.issues:
+                return True
+            self._check_for_extra_columns(df)
+            if self.fail_fast and self.issues:
+                return True
+
+        df = self._set_nulls(df)
+        self._check_for_column_nulls(df)
+        checks = [
+            lambda: self._check_primary_key_whitespace(df, start_row=start),
+            lambda: self._check_primary_key_text_lengths(df, start_row=start),
+            lambda: self._check_primary_key_integrity(df, start_row=start),
+            lambda: self._infer_datetime_formats(df),
+            lambda: self._check_column_types(df, start_row=start),
+            lambda: self._check_text_lengths(df, start_row=start),
+            lambda: self._check_text_forbidden_chars(df, start_row=start),
+        ]
+
+        for check in checks:
+            check()
+            if self.fail_fast and self.issues:
+                return True
+        return False
 
     # Global Helpers
 
@@ -362,18 +401,11 @@ class Validator:
             self.__complete_step()
             return
 
-        pk_keys = {_normalise(p) for p in pk_cols}
-
-        # Only check TEXT PK cols where dictionary length is unset or exceeds the cap
-        pk_text_cols = []
-        for column in self.table_dictionary:
-            if _normalise(column.name) not in pk_keys:
-                continue
-            if column.data_type is not DataType.TEXT:
-                continue
-            dict_len = column.length
-            if dict_len is None or dict_len > limit:
-                pk_text_cols.append(column.name)
+        pk_text_cols = _primary_key_text_columns_over_length_limit(
+            self.table_dictionary,
+            pk_cols,
+            limit,
+        )
 
         if pk_text_cols:
             for dict_col in pk_text_cols:
@@ -526,24 +558,53 @@ class Validator:
                 self.tracker_pk_hashes.setdefault(int(h), int(r))
         self.__complete_step()
 
-    def _finalise_datetime_formats(self) -> None:
-        for column in self.table_dictionary:
-            resolver = self._datetime_resolvers.get(_normalise(column.name))
-            if resolver is None:
+    def _infer_datetime_formats(self, df: DataFrame) -> None:
+        self.__begin_step(step="Inferring datetime formats")
+        if not self._dt_needs_infer:
+            self.__complete_step()
+            return
+
+        cols = [
+            (dict_col, df_col)
+            for dict_col in self._dt_needs_infer
+            if (df_col := self._resolve_df_col(df, dict_col)) is not None
+        ]
+        if not cols:
+            self.__complete_step()
+            return
+
+        from valediction.validation.helpers import _allowed_formats_for
+
+        for dict_col, df_col in cols:
+            if is_datetime64_any_dtype(df[df_col].dtype):
+                self._dt_needs_infer.discard(dict_col)
                 continue
-            ranges = resolver.conflict_ranges()
-            if ranges:
-                self.issues.add(
-                    IssueType.INCONSISTENT_DATE,
-                    self.table_name,
-                    column.name,
-                    [Range(start, end) for start, end in ranges],
-                    self.dataset_item,
-                )
-            if not resolver.conflict and not resolver.invalid:
-                column.datetime_format = (
-                    resolver.selected_format() or column.datetime_format
-                )
+
+            unique = (
+                df[df_col].astype("string", copy=False).str.strip().dropna().unique()
+            )
+            if len(unique) == 0:
+                continue
+
+            try:
+                fmt = infer_datetime_format(Series(unique, dtype="string"))
+            except ValueError:
+                continue
+
+            if not fmt or fmt is False:
+                continue
+
+            col_dtype = self._find_data_type(dict_col)  # case-insensitive getter
+            allowed_formats = _allowed_formats_for(col_dtype)
+            if col_dtype == DataType.DATE:
+                allowed_formats.extend(_allowed_formats_for(DataType.TIMESTAMP))
+            if fmt not in allowed_formats:
+                continue
+
+            self._dt_format_cache[dict_col] = fmt
+            self._dt_needs_infer.discard(dict_col)
+
+        self.__complete_step()
 
     def _save_issues(
         self,
@@ -583,6 +644,66 @@ class Validator:
                     IssueType.INTEGER_OUT_OF_RANGE, col, out_of_range, start_row
                 )
 
+    def _check_date_order(
+        self,
+        col: str,
+        series: Series,
+        invalid: Series,
+        start_row: int,
+        dtype: DataType,
+    ) -> None:
+        formats = [self._dt_format_cache.get(col) or self._find_datetime_format(col)]
+        formats.extend(fmt for fmt in _allowed_formats_for(dtype) if fmt not in formats)
+        if dtype == DataType.DATE:
+            formats.extend(
+                fmt
+                for fmt in _allowed_formats_for(DataType.TIMESTAMP)
+                if fmt not in formats
+            )
+
+        valid = series.notna() & ~invalid
+        dayfirst, monthfirst = _date_order_masks(series, valid, formats)
+        if not dayfirst.any() and not monthfirst.any():
+            return
+
+        key = _normalise(str(col))
+        dayfirst_positions = np.flatnonzero(dayfirst)
+        monthfirst_positions = np.flatnonzero(monthfirst)
+        established = self._date_orders.get(key)
+
+        if established is None:
+            first_dayfirst = (
+                dayfirst_positions[0] if dayfirst_positions.size else len(series)
+            )
+            first_monthfirst = (
+                monthfirst_positions[0] if monthfirst_positions.size else len(series)
+            )
+            if first_dayfirst < first_monthfirst:
+                established = "dayfirst"
+                anchor_position = first_dayfirst
+            else:
+                established = "monthfirst"
+                anchor_position = first_monthfirst
+            self._date_orders[key] = established
+            self._date_order_anchor_rows[key] = start_row + int(anchor_position)
+
+        conflicting = monthfirst if established == "dayfirst" else dayfirst
+        if not conflicting.any():
+            return
+
+        ranges = mask_to_ranges(Series(conflicting, index=series.index), start_row)
+        if key not in self._date_order_issue_created:
+            anchor = self._date_order_anchor_rows[key]
+            ranges.append(Range(anchor, anchor))
+            self._date_order_issue_created.add(key)
+        self.issues.add(
+            issue_type=IssueType.INCONSISTENT_DATE,
+            table=self.table_name,
+            column=col,
+            ranges=ranges,
+            parent=self.dataset_item,
+        )
+
     def _check_column_types(self, df: DataFrame, start_row: int) -> None:
         self.__begin_step(step="Checking column types")
         present = [
@@ -603,10 +724,14 @@ class Validator:
 
             if dtype == DataType.FLOAT:
                 invalid = invalid_mask_float(series)
-            elif dtype in (DataType.DATE, DataType.TIMESTAMP):
-                invalid = self._datetime_resolvers[_normalise(col)].update(
-                    series, start_row
-                )
+            elif dtype == DataType.DATE:
+                fmt = self._dt_format_cache.get(col) or self._find_datetime_format(col)
+                invalid = invalid_mask_date(series, fmt)
+                self._check_date_order(col, series, invalid, start_row, dtype)
+            elif dtype == DataType.TIMESTAMP:
+                fmt = self._dt_format_cache.get(col) or self._find_datetime_format(col)
+                invalid = invalid_mask_datetime(series, fmt)
+                self._check_date_order(col, series, invalid, start_row, dtype)
             else:
                 continue
 
@@ -679,14 +804,25 @@ class Validator:
             new_total = SINGLE_STEPS + (CHUNK_STEPS * self.est_chunk_count)
             self.progress.retarget_total(new_total=new_total)
 
-    def __finish_validation(self) -> None:
-        completed = "Completed with issues" if self.issues else "Completed"
+    def __finish_validation(self, stopped_early: bool = False) -> None:
+        completed = (
+            "Failed fast with issues"
+            if stopped_early and self.issues
+            else "Completed with issues"
+            if self.issues
+            else "Completed"
+        )
         step = (
             f"{completed} ({calculate_runtime(start=self.progress.full_start).message})"
         )
         save_as = "Total"
         good = False if self.issues else True
-        self.progress.finish(postfix=step, save_as=save_as, good=good)
+        self.progress.finish(
+            postfix=step,
+            save_as=save_as,
+            good=good,
+            complete=not (stopped_early and self.issues),
+        )
         self._runtimes = self.progress.runtimes
         self.progress.close()
 

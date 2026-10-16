@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import re
-from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation, localcontext
-from numbers import Integral
-from typing import List, Literal
+from decimal import Decimal, InvalidOperation, localcontext
+from typing import List
 
+import numpy as np
 from numpy import flatnonzero
-from pandas import NA, DataFrame, Series, to_numeric
-from pandas.api.types import is_bool_dtype, is_integer_dtype
+from pandas import NA, DataFrame, DatetimeTZDtype, Series, isna, to_datetime, to_numeric
+from pandas.api.types import (
+    is_bool_dtype,
+    is_datetime64_any_dtype,
+    is_float_dtype,
+    is_integer_dtype,
+)
 from pandas.util import hash_pandas_object
 
-from valediction.data_types.data_type_helpers import _DatetimeResolver
 from valediction.data_types.data_types import DataType
 from valediction.dictionary.model import Table
 from valediction.integrity import get_config
@@ -169,58 +173,41 @@ def pk_contains_whitespace_mask(df_primaries: DataFrame) -> Series:
 
 
 # Data Type Checks Numeric
-_INTEGER_TEXT = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
-_INTEGER_CACHE_LIMIT = 65_536
+_INT64_MIN_ABS = str(2**63)
+_INT64_MAX_STR = str(_INT64_MAX)
 
 
-def _parse_integer_text(text: str, limit: Decimal) -> int | None:
-    if _INTEGER_TEXT.fullmatch(text):
-        try:
-            numeric = Decimal(text)
-            nearest = numeric.to_integral_value(rounding=ROUND_HALF_EVEN)
-            if _INT64_MIN <= nearest <= _INT64_MAX:
-                with localcontext() as context:
-                    context.prec = max(28, len(numeric.as_tuple().digits) + 20)
-                    if abs(numeric - nearest) <= limit:
-                        return int(nearest)
-        except InvalidOperation:
-            pass
-    return None
+def _invalid_decimal_integer(value: str, tolerance: Decimal) -> bool:
+    try:
+        number = Decimal(value)
+    except InvalidOperation:
+        return True
 
+    if not number.is_finite():
+        return True
+    if number.adjusted() > 18:
+        return True
+    if abs(number) <= Decimal("0.5") and abs(number) <= tolerance:
+        return False
 
-def _parse_integer(
-    column: Series, *, errors: Literal["coerce", "raise"], tolerance: float = 1e-12
-) -> Series:
-    if is_integer_dtype(column.dtype) or is_bool_dtype(column.dtype):
-        invalid = ((column < _INT64_MIN) | (column > _INT64_MAX)).fillna(False)
-        parsed = column.mask(invalid, 0).astype("Int64").mask(invalid)
-    else:
-        converted = [NA] * len(column)
-        values = column.array
-        limit = Decimal(str(tolerance))
-        cache: dict[str, int | None] = {}
-        for position in flatnonzero(column.notna().to_numpy()):
-            value = values[position]
-            text = (
-                str(int(value)) if isinstance(value, Integral) else str(value).strip()
-            )
-            if text not in cache:
-                result = _parse_integer_text(text, limit)
-                if len(cache) < _INTEGER_CACHE_LIMIT:
-                    cache[text] = result
-            else:
-                result = cache[text]
-            if result is not None:
-                converted[position] = result
-        parsed = Series(converted, index=column.index, name=column.name, dtype="Int64")
-        invalid = column.notna() & parsed.isna()
-    if errors == "raise" and invalid.any():
-        raise ValueError(
-            "Non-null integer values must be integer-equivalent and within signed 64-bit range"
+    parts = number.as_tuple()
+    with localcontext() as context:
+        context.prec = max(
+            context.prec,
+            len(parts.digits) + max(0, -parts.exponent) + 2,
         )
-    return parsed
+        rounded = number.to_integral_value()
+        fractional = abs(number - rounded)
+
+    return fractional > tolerance or rounded < _INT64_MIN or rounded > _INT64_MAX
+
+
+def _coerce_validated_integer(value: object) -> object:
+    if isna(value):
+        return NA
+    return int(Decimal(str(value)).to_integral_value())
 
 
 def invalid_mask_integer(column: Series, *, tolerance: float = 1e-12) -> Series:
@@ -229,8 +216,60 @@ def invalid_mask_integer(column: Series, *, tolerance: float = 1e-12) -> Series:
 
     Accepts scientific notation (e.g. '1e2').
     """
-    parsed = _parse_integer(column, errors="coerce", tolerance=tolerance)
-    return column.notna() & parsed.isna()
+    notnull = column.notna()
+    numeric = to_numeric(column, errors="coerce")
+    invalid = notnull & numeric.isna()
+
+    conversion_mask = notnull & numeric.notna()
+    if conversion_mask.any():
+        converted = numeric[conversion_mask]
+
+        if is_integer_dtype(numeric.dtype):
+            if numeric.dtype.kind == "u":
+                invalid_conv = converted > _INT64_MAX
+            else:
+                invalid_conv = (converted < _INT64_MIN) | (converted > _INT64_MAX)
+        elif is_float_dtype(column.dtype):
+            values = converted.to_numpy(dtype="float64")
+            finite = np.isfinite(values)
+            rounded = np.rint(values)
+            fractional = np.zeros(values.shape, dtype=bool)
+            fractional[finite] = np.abs(values[finite] - rounded[finite]) > tolerance
+            invalid_conv = Series(
+                ~finite | fractional | (rounded < _INT64_MIN) | (rounded >= 2**63),
+                index=converted.index,
+            )
+        elif is_bool_dtype(numeric.dtype):
+            invalid_conv = Series(False, index=converted.index)
+        else:
+            text = column[conversion_mask].astype("string").str.strip()
+            integer_token = text.str.fullmatch(r"[+-]?\d+", na=False)
+            invalid_conv = Series(False, index=text.index)
+
+            integer_values = text[integer_token]
+            if not integer_values.empty:
+                negative = integer_values.str.startswith("-")
+                digits = integer_values.str.replace(r"^[+-]", "", regex=True)
+                digits = digits.str.lstrip("0").mask(lambda values: values.eq(""), "0")
+                limits = Series(
+                    np.where(negative, _INT64_MIN_ABS, _INT64_MAX_STR),
+                    index=digits.index,
+                    dtype="string",
+                )
+                out_of_range = (digits.str.len() > limits.str.len()) | (
+                    (digits.str.len() == limits.str.len()) & (digits > limits)
+                )
+                invalid_conv.loc[integer_values.index] = out_of_range
+
+            decimal_values = text[~integer_token]
+            if not decimal_values.empty:
+                decimal_tolerance = Decimal(str(tolerance))
+                invalid_conv.loc[decimal_values.index] = decimal_values.map(
+                    lambda value: _invalid_decimal_integer(value, decimal_tolerance)
+                )
+
+        invalid.loc[conversion_mask] = invalid_conv.to_numpy(dtype=bool)
+    return invalid
 
 
 def invalid_mask_float(column: Series) -> Series:
@@ -241,23 +280,275 @@ def invalid_mask_float(column: Series) -> Series:
 
 
 # Data Type Checks Date
-def invalid_mask_date(column: Series, fmt: str | None) -> Series:
-    """Must not contain a non-zero time component."""
-    parsed = _DatetimeResolver(DataType.DATE, fmt).parse(column, errors="coerce")
-    return column.notna() & parsed.isna()
+def _allowed_formats_for(dtype: DataType) -> list[str]:
+    """Return the list of formats from Config.date_formats allowed for the given
+    DataType."""
+    config = get_config()
+    return [fmt for fmt, data_type in config.date_formats.items() if data_type == dtype]
 
 
-def _parse_timestamp(
-    column: Series, fmt: str | None, *, errors: Literal["coerce", "raise"]
+def _date_order_for_format(fmt: str) -> str | None:
+    day_position = fmt.find("%d")
+    month_position = fmt.find("%m")
+    year_position = fmt.find("%Y")
+    if (
+        day_position < 0
+        or month_position < 0
+        or (year_position >= 0 and year_position < min(day_position, month_position))
+    ):
+        return None
+    return "dayfirst" if day_position < month_position else "monthfirst"
+
+
+def _date_order_masks(
+    column: Series, valid: Series, formats: list[str]
+) -> tuple[np.ndarray, np.ndarray]:
+    supported_orders = {
+        _date_order_for_format(fmt) for fmt in formats if fmt is not None
+    }
+    if not supported_orders.intersection({"dayfirst", "monthfirst"}):
+        empty = np.zeros(len(column), dtype=bool)
+        return empty, empty.copy()
+
+    if is_datetime64_any_dtype(column.dtype):
+        empty = np.zeros(len(column), dtype=bool)
+        return empty, empty.copy()
+
+    try:
+        candidate_mask = column.str.match(
+            r"^\s*\d{1,2}[/-]\d{1,2}[/-]\d{4}(?:\D|$)", na=False
+        ).to_numpy(dtype=bool)
+    except AttributeError:
+        empty = np.zeros(len(column), dtype=bool)
+        return empty, empty.copy()
+
+    positions = np.flatnonzero(candidate_mask)
+    if positions.size == 0:
+        empty = np.zeros(len(column), dtype=bool)
+        return empty, empty.copy()
+
+    parts = column.iloc[positions].str.extract(
+        r"^\s*(\d{1,2})[/-](\d{1,2})[/-]\d{4}(?:\D|$)", expand=True
+    )
+    first = to_numeric(parts[0], errors="coerce").to_numpy()
+    second = to_numeric(parts[1], errors="coerce").to_numpy()
+    is_valid = valid.to_numpy(dtype=bool)
+    dayfirst = (
+        (first > 12)
+        & (second >= 1)
+        & (second <= 12)
+        & is_valid[positions]
+        & ("dayfirst" in supported_orders)
+    )
+    monthfirst = (
+        (second > 12)
+        & (first >= 1)
+        & (first <= 12)
+        & is_valid[positions]
+        & ("monthfirst" in supported_orders)
+    )
+    dayfirst_mask = np.zeros(len(column), dtype=bool)
+    monthfirst_mask = np.zeros(len(column), dtype=bool)
+    dayfirst_mask[positions] = dayfirst
+    monthfirst_mask[positions] = monthfirst
+    return dayfirst_mask, monthfirst_mask
+
+
+def _prioritize_date_order(formats: list[str], order: str | None) -> list[str]:
+    if order is None:
+        return formats
+
+    return sorted(
+        formats,
+        key=lambda fmt: (
+            0
+            if _date_order_for_format(fmt) == order
+            else 1
+            if _date_order_for_format(fmt) is None
+            else 2
+        ),
+    )
+
+
+def _parse_ok_any(column: Series, formats: list[str]) -> Series:
+    notnull = column.notna()
+    valid = Series(False, index=column.index)
+    remaining = notnull.to_numpy()
+    for fmt in formats:
+        positions = remaining.nonzero()[0]
+        if positions.size == 0:
+            break
+        parsed = to_datetime(
+            column.iloc[positions], format=fmt, errors="coerce", utc=False
+        )
+        matched = parsed.notna().to_numpy()
+        if matched.any():
+            valid.iloc[positions[matched]] = True
+            remaining[positions[matched]] = False
+    return valid
+
+
+def _parse_datetime_strict(column: Series, fmt: str) -> Series | None:
+    try:
+        return to_datetime(column, format=fmt, errors="raise", utc=False)
+    except (TypeError, ValueError):
+        return None
+
+
+def _merge_datetime_matches(
+    result: Series | None,
+    parsed: Series,
+    positions: np.ndarray,
+    matched: np.ndarray,
+    index,
 ) -> Series:
-    return _DatetimeResolver(DataType.TIMESTAMP, fmt).parse(column, errors=errors)
+    if result is None:
+        result = Series(index=index, dtype=parsed.dtype)
+    elif result.dtype != parsed.dtype and (
+        isinstance(result.dtype, DatetimeTZDtype)
+        or isinstance(parsed.dtype, DatetimeTZDtype)
+    ):
+        result = result.astype(object)
+    result.iloc[positions[matched]] = parsed.iloc[matched].array
+    return result
+
+
+def _parse_datetime_fallback(column: Series, formats: list[str]) -> Series:
+    result = None
+    remaining = column.notna().to_numpy()
+    for fmt in formats:
+        positions = remaining.nonzero()[0]
+        if positions.size == 0:
+            break
+        parsed = to_datetime(
+            column.iloc[positions], format=fmt, errors="coerce", utc=False
+        )
+        matched = parsed.notna().to_numpy()
+        if matched.any():
+            result = _merge_datetime_matches(
+                result, parsed, positions, matched, column.index
+            )
+            remaining[positions[matched]] = False
+    if result is None:
+        return Series(index=column.index, name=column.name, dtype="datetime64[ns]")
+    result.name = column.name
+    return (
+        to_datetime(result, errors="coerce", utc=False)
+        if result.dtype == object
+        else result
+    )
+
+
+def _to_datetime_with_formats(column: Series, formats: list[str]) -> Series:
+    if is_datetime64_any_dtype(column.dtype):
+        return column
+
+    if formats:
+        parsed = _parse_datetime_strict(column, formats[0])
+        if parsed is not None:
+            return parsed
+    return _parse_datetime_fallback(column, formats)
+
+
+def _is_midnight(parsed: Series) -> Series:
+    return (
+        (parsed.dt.hour == 0)
+        & (parsed.dt.minute == 0)
+        & (parsed.dt.second == 0)
+        & (parsed.dt.microsecond == 0)
+        & (parsed.dt.nanosecond == 0)
+    )
+
+
+def _date_parse_masks(parsed: Series) -> tuple[np.ndarray, np.ndarray]:
+    matched = parsed.notna().to_numpy()
+    if isinstance(parsed.dtype, DatetimeTZDtype):
+        return matched, np.zeros(matched.shape, dtype=bool)
+    if is_datetime64_any_dtype(parsed.dtype):
+        valid = _is_midnight(parsed).fillna(False).to_numpy()
+        return matched, matched & valid
+
+    valid = np.zeros(matched.shape, dtype=bool)
+    for position in np.flatnonzero(matched):
+        value = parsed.iloc[position]
+        timezone = getattr(value, "tzinfo", None)
+        if timezone is not None and value.utcoffset() is not None:
+            continue
+        valid[position] = (
+            getattr(value, "hour", 0) == 0
+            and getattr(value, "minute", 0) == 0
+            and getattr(value, "second", 0) == 0
+            and getattr(value, "microsecond", 0) == 0
+            and getattr(value, "nanosecond", 0) == 0
+        )
+    return matched, matched & valid
+
+
+def _valid_date_fallback(column: Series, formats: list[str]) -> Series:
+    valid = Series(False, index=column.index)
+    remaining = column.notna().to_numpy()
+    for fmt in formats:
+        positions = remaining.nonzero()[0]
+        if positions.size == 0:
+            break
+        parsed = to_datetime(
+            column.iloc[positions], format=fmt, errors="coerce", utc=False
+        )
+        matched, accepted = _date_parse_masks(parsed)
+        if accepted.any():
+            valid.iloc[positions[accepted]] = True
+        remaining[positions[matched]] = False
+    return valid
+
+
+def _invalid_date_mask(column: Series, parsed: Series | None = None) -> Series:
+    notnull = column.notna()
+    if isinstance(column.dtype, DatetimeTZDtype):
+        return notnull
+    values = column if parsed is None else parsed
+    return notnull & ~_is_midnight(values)
+
+
+def invalid_mask_date(column: Series, fmt: str | None) -> Series:
+    """Reject non-midnight and timezone-aware values for DATE columns."""
+    notnull = column.notna()
+    formats = [fmt] if fmt else []
+    formats.extend(
+        candidate
+        for candidate in (
+            *_allowed_formats_for(DataType.DATE),
+            *_allowed_formats_for(DataType.TIMESTAMP),
+        )
+        if candidate not in formats
+    )
+    if is_datetime64_any_dtype(column.dtype):
+        return _invalid_date_mask(column)
+    if formats:
+        parsed = _parse_datetime_strict(column, formats[0])
+        if parsed is not None:
+            if isinstance(parsed.dtype, DatetimeTZDtype):
+                return notnull
+            _, accepted = _date_parse_masks(parsed)
+            return notnull & ~Series(accepted, index=column.index)
+    valid = _valid_date_fallback(column, formats)
+    return notnull & ~valid
 
 
 def invalid_mask_datetime(column: Series, fmt: str | None) -> Series:
     notnull = column.notna()
+    if is_datetime64_any_dtype(column.dtype):
+        return Series(False, index=column.index)
 
-    parsed = _parse_timestamp(column, fmt, errors="coerce")
-    return notnull & parsed.isna()
+    allowed = [fmt] if fmt else []
+    allowed.extend(
+        candidate
+        for candidate in _allowed_formats_for(DataType.TIMESTAMP)
+        if candidate not in allowed
+    )
+    if allowed and _parse_datetime_strict(column, allowed[0]) is not None:
+        return Series(False, index=column.index)
+    ok_any = _parse_ok_any(column, allowed)
+    return notnull & (~ok_any)
 
 
 # Other Text Checks
@@ -271,6 +562,21 @@ def invalid_mask_text_too_long(column: Series, max_len: int) -> Series:
     lens = s_txt.str.len()
 
     return notnull & (lens > max_len)
+
+
+def _primary_key_text_columns_over_length_limit(
+    table: Table,
+    primary_keys: list[str],
+    max_length: int,
+) -> list[str]:
+    primary_key_names = {_normalise(name) for name in primary_keys}
+    return [
+        column.name
+        for column in table
+        if _normalise(column.name) in primary_key_names
+        and column.data_type is DataType.TEXT
+        and (column.length is None or column.length > max_length)
+    ]
 
 
 def invalid_mask_text_forbidden_characters(column: Series) -> Series:
@@ -288,32 +594,64 @@ def invalid_mask_text_forbidden_characters(column: Series) -> Series:
 
 
 # Apply Data Types #
-def apply_data_types(df: DataFrame, table_dictionary: Table) -> DataFrame:
-    df = _set_nulls(df)
+def apply_data_types(
+    df: DataFrame,
+    table_dictionary: Table,
+    datetime_formats: dict[str, str | None] | None = None,
+    datetime_orders: dict[str, str] | None = None,
+) -> DataFrame:
     # name -> column object
     column_dictionary = {_normalise(column.name): column for column in table_dictionary}
+    datetime_formats = datetime_formats or {}
+    datetime_orders = datetime_orders or {}
 
     for col in df.columns:
         data_type = column_dictionary.get(_normalise(col)).data_type
-        datetime_format = column_dictionary.get(_normalise(col)).datetime_format
+        column = column_dictionary.get(_normalise(col))
+        datetime_format = datetime_formats.get(column.name) or column.datetime_format
+        datetime_order = datetime_orders.get(_normalise(column.name))
 
         if data_type in (DataType.TEXT, DataType.FILE):
             df[col] = df[col].astype("string")
 
         elif data_type == DataType.INTEGER:
-            df[col] = _parse_integer(df[col], errors="raise")
+            # Accepts '12', '12.0', '1e2' etc.; validation guarantees integer-equivalent
+            source = df[col]
+            nums = to_numeric(source, errors="raise")
+            if is_integer_dtype(nums.dtype):
+                df[col] = nums.astype("Int64")
+            elif is_float_dtype(source.dtype):
+                df[col] = nums.round().astype("Int64")
+            else:
+                df[col] = source.map(_coerce_validated_integer).astype("Int64")
 
         elif data_type == DataType.FLOAT:
-            df[col] = df[col].map(float, na_action="ignore").astype("Float64")
+            nums = to_numeric(df[col], errors="raise")
+            df[col] = nums.astype("Float64")
 
         elif data_type == DataType.DATE:
-            dtv = _DatetimeResolver(DataType.DATE, datetime_format).parse(
-                df[col], errors="raise"
+            formats = [datetime_format] if datetime_format else []
+            formats.extend(
+                fmt
+                for fmt in (
+                    *_allowed_formats_for(DataType.DATE),
+                    *_allowed_formats_for(DataType.TIMESTAMP),
+                )
+                if fmt not in formats
             )
+            formats = _prioritize_date_order(formats, datetime_order)
+            dtv = _to_datetime_with_formats(df[col], formats)
             df[col] = dtv.dt.normalize()  # midnight
 
         elif data_type == DataType.TIMESTAMP:
-            df[col] = _parse_timestamp(df[col], datetime_format, errors="raise")
+            formats = [datetime_format] if datetime_format else []
+            formats.extend(
+                fmt
+                for fmt in _allowed_formats_for(DataType.TIMESTAMP)
+                if fmt not in formats
+            )
+            formats = _prioritize_date_order(formats, datetime_order)
+            df[col] = _to_datetime_with_formats(df[col], formats)
 
         else:
             # Fallback: keep as string
@@ -323,6 +661,10 @@ def apply_data_types(df: DataFrame, table_dictionary: Table) -> DataFrame:
 
 
 # Bigint Checks
+_PG_INT4_MIN = -(2**31)
+_PG_INT4_MAX = 2**31 - 1
+
+
 def invalid_mask_integer_out_of_range(
     series: Series,
     invalid_integer_mask: Series | None = None,
@@ -333,8 +675,20 @@ def invalid_mask_integer_out_of_range(
       - fall outside PostgreSQL INTEGER (int4) range.
     """
 
-    parsed = _parse_integer(series, errors="coerce")
-    out = ((parsed < -(2**31)) | (parsed > 2**31 - 1)).fillna(False)
-    if invalid_integer_mask is not None:
-        out &= ~invalid_integer_mask
+    # Start with all-False mask
+    out = series.isna() & False
+
+    # Use caller-provided invalid mask to avoid recomputing if available
+    if invalid_integer_mask is None:
+        from valediction.validation.helpers import invalid_mask_integer  # avoid cycles
+
+        invalid_integer_mask = invalid_mask_integer(series)
+
+    # We only check range for values that already pass integer validation
+    valid = (~invalid_integer_mask) & series.notna()
+    if not valid.any():
+        return out
+
+    numeric = to_numeric(series[valid], errors="raise").round()
+    out.loc[valid] = ((numeric < _PG_INT4_MIN) | (numeric > _PG_INT4_MAX)).to_numpy()
     return out

@@ -1,33 +1,64 @@
-## v1.7.8 (2026-10-05)
+## v1.8.3 (2026-10-14)
+
+### Feat
+
+- **optimisation**: performance optimisation for new fixes
+
+### Fix
+
+- **warnings**: hardened  invalid_mask_integer_out_of_range() against overflows in scientific notation
+- **warning**: null validation differences between CSV and DataFrame differences
+- **warning**: nanoseconds incorporated into datetime vs date checks
+- **warning**: fixed fmt_or_none is None in datetime format matching
+- **infer_datetime-&-decimal-validation**: fixed warnings around early datetime format inference and integer acceptance hardening
+
+## v1.8.2 (2026-10-14)
+
+### Feat
+
+- **convenience**: refactored convenience validate() function to add Dataset pass, supporting Cynric downstream without code duplication
+
+## v1.8.1 (2026-10-14)
+
+### Feat
+
+- **fail_fast**: tweaked progress bar to not show completed
+- **fail_fast**: added fail_fast argument to validation functions to exit and fail immediately on first error
+
+## v1.8.0 (2026-10-13)
+
+### Feat
+
+- **INCONSISTENT_DATE**: added issue handling for inconsistent day-first/month-first issue handling
+- **timestamps**: implemented timestamp/date fixes
+- **validation**: removed global conversion to string as non-performative
+- **validation**: implemented conversion to string prior to validation, ready for performance testing
+- **validation**: added opt-in `fail_fast` validation with partial issue reporting
+
+### Fix
+
+- **validation\helpers.py**: fixed passing non-midnight datetimes as dates when dtypes are mixed in column
+- **REVERSION**: reverted to v1.7.5 codebase to correct performance hits following timestamp changes
+
+## v1.7.8 (2026-10-05) [YANKED]
+_yanked due to significant reduction in speed when processing datetimes, fixed in v1.8.0_
 
 ### Feat
 
 - **data_type_helpers.py**: added timezone partitioning to future-proof against Pandas' mixed timezone FutureWarning
 - **_parse_integer**: added cache limit before clearing to prevent endless cache growth while validating
-- **inconsitent_date**: new issue added to raise on conflicting dd/mm vs mm/dd types
-
-## v1.7.7 (2026-10-02)
-
-### Feat
-
+- **INCONSISTENT_DATE**: report valid unambiguous day-first and month-first date values mixed in one DATE or TIMESTAMP column
 - **dates**: dates accepted as timestamp types
-
-### Fix
-
 - **io**: preserve typed values across CSV import and export
 - **timestamp**: fix for locally imported data timestamp interpretation
-
-## v1.7.6 (2026-10-02)
-
-### Feat
-
 - **dates**: dates accepted as timestamp types
 - **generation.py**: added check for duplicate headers to raise early error with message, rather than erroring on nested DataFrames
 
-### Fix
+## v1.7.6 (2026-08-14) [YANKED]
+_yanked due to significant reduction in speed when processing datetimes, fixed in v1.8.0_
+### Feat
 
-- **io**: preserve typed values across CSV import and export
-- **timestamp**: fix for localled imported data timestamp interpretation
+- **generation.py**: added check for duplicate headers to raise early error with message, rather than erroring on nested DataFrames
 
 ## v1.7.5 (2026-06-16)
 

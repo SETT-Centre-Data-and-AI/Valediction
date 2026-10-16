@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from typing import Iterable, Iterator
 
-from pandas import DataFrame, NaT, Series
-from pandas.api.types import is_datetime64_any_dtype
+from pandas import DataFrame
 
-from valediction.data_types.data_types import DataType
 from valediction.datasets.datasets_helpers import DataLike
 from valediction.dictionary.generation import Generator
 from valediction.dictionary.importing import import_dictionary
@@ -28,7 +26,7 @@ from valediction.support import (
     print_bold_red,
     print_red,
 )
-from valediction.validation.helpers import apply_data_types
+from valediction.validation.helpers import _set_nulls, apply_data_types
 from valediction.validation.issues import Issues
 from valediction.validation.validation import Validator
 
@@ -140,6 +138,7 @@ class DatasetItem:
         self,
         chunk_size: int | None = 10_000_000,
         feedback: bool = True,
+        fail_fast: bool = False,
     ) -> None:
         """
         Summary:
@@ -150,6 +149,8 @@ class DatasetItem:
             chunk_size (int | None): Size of chunks for validating data to optimise RAM usage,
                 if reading from CSV (default: 10_000_000)
             feedback (bool): Provide user feedback on progress (default: True)
+            fail_fast (bool): Stop after the first issue-producing check and raise with
+                the partial issues (default: False)
 
         Raises:
             DataDictionaryImportError: if there is an issue with importing the dictionary
@@ -160,6 +161,7 @@ class DatasetItem:
             table_dictionary=self.table_dictionary,
             chunk_size=chunk_size,
             feedback=feedback,
+            fail_fast=fail_fast,
             _padding=self._padding,
         )
 
@@ -175,6 +177,8 @@ class DatasetItem:
         except DataIntegrityError:
             object.__setattr__(self, "validated", False)
             object.__setattr__(self, "issues", validator.issues)
+            if fail_fast:
+                raise
 
         # No Issues
         else:
@@ -239,7 +243,14 @@ class DatasetItem:
             self.import_data()
 
         object.__setattr__(
-            self, "data", apply_data_types(self.data, self.table_dictionary)
+            self,
+            "data",
+            apply_data_types(
+                self.data,
+                self.table_dictionary,
+                self.validator._dt_format_cache if self.validator else None,
+                self.validator._date_orders if self.validator else None,
+            ),
         )
 
     # Data Import
@@ -256,7 +267,10 @@ class DatasetItem:
             return
 
         else:
-            object.__setattr__(self, "data", read_csv_all(self.data).df)
+            data = read_csv_all(self.data).df
+            if self.validated:
+                data = _set_nulls(data)
+            object.__setattr__(self, "data", data)
             if self.table_dictionary and self.validated:
                 self.apply_dictionary()
 
@@ -281,18 +295,18 @@ class DatasetItem:
                 + "All data will be yielded with string dtypes."
             )
         if self.is_path:
-            timestamp_dtypes = {}
             for chunk in iter_csv_chunks(path=self.data, chunk_size=chunk_size):
                 if self.validated:
-                    df = apply_data_types(chunk.df, self.table_dictionary)
-                    for name in df.columns:
-                        if is_datetime64_any_dtype(df[name]):
-                            if df[name].notna().any():
-                                timestamp_dtypes[name] = df[name].dtype
-                            elif name in timestamp_dtypes:
-                                df[name] = Series(
-                                    NaT, index=df.index, dtype=timestamp_dtypes[name]
-                                )
+                    df = _set_nulls(chunk.df)
+                    datetime_formats = (
+                        self.validator._dt_format_cache if self.validator else None
+                    )
+                    df = apply_data_types(
+                        df,
+                        self.table_dictionary,
+                        datetime_formats,
+                        self.validator._date_orders if self.validator else None,
+                    )
                     chunk.update_df(df)
                 yield chunk
 
@@ -354,33 +368,7 @@ class DatasetItem:
         if out_path.exists() and not overwrite:
             raise ValueError(f"File exists and overwrite=False: {out_path}")
 
-        data = self.data.copy(deep=False)
-        if self.table_dictionary:
-            columns = {
-                _normalise(column.name): column for column in self.table_dictionary
-            }
-            for name in data.columns:
-                column = columns.get(_normalise(name))
-                if column is None:
-                    continue
-                if column.data_type == DataType.TIMESTAMP:
-                    if (
-                        is_datetime64_any_dtype(data[name])
-                        or data[name]
-                        .dropna()
-                        .map(lambda value: isinstance(value, datetime))
-                        .all()
-                    ):
-                        data[name] = data[name].map(
-                            lambda value: value.isoformat(), na_action="ignore"
-                        )
-                elif column.data_type == DataType.DATE and is_datetime64_any_dtype(
-                    data[name]
-                ):
-                    data[name] = data[name].dt.strftime(
-                        column.datetime_format or "%Y-%m-%d"
-                    )
-        data.to_csv(out_path, index=False)
+        self.data.to_csv(out_path, index=False)
 
     # Helpers
     def _attach_table_dictionary(self, table_dictionary: Table):
@@ -750,6 +738,7 @@ class Dataset(list[DatasetItem]):
         self,
         chunk_size: int | None = 10_000_000,
         feedback: bool = True,
+        fail_fast: bool = False,
     ) -> None:
         """
         Summary:
@@ -758,6 +747,8 @@ class Dataset(list[DatasetItem]):
         Arguments:
             chunk_size (int): Size of chunks for validating data to optimise RAM usage.
             feedback (bool): Provide user feedback on progress (default: True)
+            fail_fast (bool): Stop after the first failing table and raise with the
+                partial issues (default: False)
 
         Returns:
             None
@@ -769,16 +760,25 @@ class Dataset(list[DatasetItem]):
         if feedback:
             print(f"Validating {len(self)} tables")
         self.__check_dictionary()
+        fail_fast_error: DataIntegrityError | None = None
         for item in self:
             try:
                 item.validate(
                     chunk_size=chunk_size,
                     feedback=feedback,
+                    fail_fast=fail_fast,
                 )
-            except DataIntegrityError:
-                pass
+            except DataIntegrityError as error:
+                if fail_fast:
+                    fail_fast_error = error
+                    break
 
         self.__reattach_issues()
+
+        if fail_fast_error is not None:
+            if feedback:
+                print("\n", end="")
+            raise fail_fast_error
 
         # Report Issues
         try:
