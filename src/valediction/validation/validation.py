@@ -43,8 +43,9 @@ from valediction.validation.helpers import (
 from valediction.validation.issues import Issues, IssueType, Range
 
 IMPORTING_DATA = "Importing data"
-SINGLE_STEPS: int = 3  # tweak if adding/amending step tracking
+ONE_TIME_STEPS: int = 2  # missing/extra column checks on the first chunk
 CHUNK_STEPS: int = 13  # tweak if adding/amending step tracking
+PRIMARY_KEY_STEPS: int = 5
 
 
 class Validator:
@@ -105,9 +106,12 @@ class Validator:
         self.progress: Progress | None = None
         self.est_chunk_count: int = None
         self._runtimes: dict[str, timedelta] = None
+        self.__count_single_steps: int = 0
+        self.__count_chunk_steps: int = 0
 
         # Setup
         self.__check_dictionary()
+        self.__calculate_number_of_steps()
         self.__init_issues()
         self.__init_csv_cfg()
         self.__reset_pk_trackers()
@@ -235,7 +239,9 @@ class Validator:
                 return True
 
         df = self._set_nulls(df)
-        self._check_for_column_nulls(df)
+        required_null_found = self._check_for_column_nulls(df, start_row=start)
+        if self.fail_fast and required_null_found:
+            return True
         checks = [
             lambda: self._check_primary_key_whitespace(df, start_row=start),
             lambda: self._check_primary_key_text_lengths(df, start_row=start),
@@ -358,14 +364,39 @@ class Validator:
         self.__complete_step()
         return df
 
-    def _check_for_column_nulls(self, df: DataFrame) -> None:
+    def _check_for_column_nulls(self, df: DataFrame, start_row: int) -> bool:
         self.__begin_step(step="Checking for column nulls")
         for column in df.columns:
             # Check if previously checked and found
             seen_or_found = self.tracker_seen_non_nulls.get(column, False)
             if not seen_or_found:
                 self.tracker_seen_non_nulls[column] = _column_has_values(df[column])
+
+        primary_keys = {
+            _normalise(column.name)
+            for column in self.table_dictionary
+            if column.primary_key is not None
+        }
+        required_null_found = False
+        for column in self.table_dictionary:
+            if not column.required or _normalise(column.name) in primary_keys:
+                continue
+
+            dataframe_column = self._resolve_df_col(df, column.name)
+            if dataframe_column is None:
+                continue
+
+            invalid = df[dataframe_column].isna()
+            if invalid.any():
+                required_null_found = True
+                self._save_issues(
+                    IssueType.REQUIRED_NULL,
+                    dataframe_column,
+                    invalid,
+                    start_row,
+                )
         self.__complete_step()
+        return required_null_found
 
     def _check_primary_key_whitespace(self, df: DataFrame, start_row: int) -> None:
         pk_cols = self.table_dictionary.get_primary_keys()
@@ -777,14 +808,25 @@ class Validator:
             self.__complete_step()
 
     # Progress Helpers
+    def __calculate_number_of_steps(self) -> None:
+        config = get_config()
+        self.__count_single_steps = ONE_TIME_STEPS + int(config.enforce_no_null_columns)
+        self.__count_chunk_steps = CHUNK_STEPS - (
+            0 if self.table_dictionary.get_primary_keys() else PRIMARY_KEY_STEPS
+        )
+
     def __progress_init(self) -> None:
         if not self.feedback:
             self.progress = Progress(enabled=False)
             return
 
         total_steps = (
-            (SINGLE_STEPS + CHUNK_STEPS)
-            if (isinstance(self.data, DataFrame) or not self.chunk_size)
+            self.__count_single_steps + self.__count_chunk_steps
+            if (
+                self.data_is_dataframe
+                or self.chunk_size is None
+                or self.chunk_size <= 0
+            )
             else None
         )
         self.est_chunk_count = None
@@ -801,7 +843,9 @@ class Validator:
         """Once est_chunk_count is known, resize the bar without losing progress."""
         if est_chunk_count != self.est_chunk_count:
             self.est_chunk_count = est_chunk_count
-            new_total = SINGLE_STEPS + (CHUNK_STEPS * self.est_chunk_count)
+            new_total = self.__count_single_steps + (
+                self.__count_chunk_steps * self.est_chunk_count
+            )
             self.progress.retarget_total(new_total=new_total)
 
     def __finish_validation(self, stopped_early: bool = False) -> None:

@@ -1,3 +1,11 @@
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _distribution_version
+
+try:
+    __version__ = _distribution_version("valediction")
+except PackageNotFoundError:
+    __version__ = "0+unknown"
+
 from valediction.datasets.datasets import Dataset  # noqa
 from valediction.dictionary.importing import import_dictionary  # noqa
 from valediction.dictionary.exporting import export_dictionary  # noqa

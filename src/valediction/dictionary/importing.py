@@ -18,7 +18,12 @@ from valediction.dictionary.helpers import (
 from valediction.dictionary.integrity import REQUIRED_SHEETS
 from valediction.dictionary.model import Column, Dictionary, Table
 from valediction.exceptions import DataDictionaryError, DataDictionaryImportError
-from valediction.support import _normalise, _strip, list_as_bullets
+from valediction.support import (
+    _normalise,
+    _strip,
+    list_as_bullets,
+    parse_delimited_list,
+)
 
 
 @dataclass
@@ -28,11 +33,12 @@ class _ColumnInputs:
     order_int: int
     data_type: DataType
     length_int: int | None
-    vocabulary: str | None
+    vocabulary: list[str] | None
     primary_key_int: int | None
-    foreign_key_target: str | None
+    foreign_key_target: list[str] | None
     description: str | None
     has_enumerations: bool
+    required: bool
     row_context: str
 
 
@@ -213,6 +219,7 @@ class ExcelDataDictionary:
             primary_key_col_header,
             foreign_key_col_header,
             description_col_header,
+            required_col_header,
         ) = self._columns_headers(header_map)
 
         self.table_columns = {t: [] for t in self.table_metadata}
@@ -235,6 +242,7 @@ class ExcelDataDictionary:
                     primary_key_col_header=primary_key_col_header,
                     foreign_key_col_header=foreign_key_col_header,
                     description_col_header=description_col_header,
+                    required_col_header=required_col_header,
                 )
             except DataDictionaryImportError as e:
                 errors.append(str(e))
@@ -304,27 +312,27 @@ class ExcelDataDictionary:
             for column in table:
                 if not column.foreign_key:
                     continue
-                target = column.foreign_key.strip()
-                if target.count(".") != 1:
-                    errors.append(
-                        f"{table.name}.{column.name} foreign key must be 'TABLE.COLUMN' (got {target!r})."
-                    )
-                    continue
-                target_table_raw, target_column_raw = target.split(".", 1)
-                target_table_name = _strip(target_table_raw)
-                target_column_name = _strip(target_column_raw)
-                referenced_table = name_to_table.get(_normalise(target_table_name))
-                if not referenced_table:
-                    errors.append(
-                        f"{table.name}.{column.name} references unknown table {target_table_name!r}."
-                    )
-                    continue
-                try:
-                    referenced_table.get_column(target_column_name)
-                except KeyError:
-                    errors.append(
-                        f"{table.name}.{column.name} references unknown column {target_table_name}.{target_column_name}."
-                    )
+                for target in column.foreign_key:
+                    if target.count(".") != 1:
+                        errors.append(
+                            f"{table.name}.{column.name} foreign key must be 'TABLE.COLUMN' (got {target!r})."
+                        )
+                        continue
+                    target_table_raw, target_column_raw = target.split(".", 1)
+                    target_table_name = _strip(target_table_raw)
+                    target_column_name = _strip(target_column_raw)
+                    referenced_table = name_to_table.get(_normalise(target_table_name))
+                    if not referenced_table:
+                        errors.append(
+                            f"{table.name}.{column.name} references unknown table {target_table_name!r}."
+                        )
+                        continue
+                    try:
+                        referenced_table.get_column(target_column_name)
+                    except KeyError:
+                        errors.append(
+                            f"{table.name}.{column.name} references unknown column {target_table_name}.{target_column_name}."
+                        )
         if errors:
             # Template issue → ImportError
             raise DataDictionaryImportError(
@@ -353,6 +361,7 @@ class ExcelDataDictionary:
         str | None,
         str | None,
         str | None,
+        str | None,
     ]:
         table_col_header = _get_required_header(header_map, "table")
         column_col_header = _get_required_header(header_map, "column")
@@ -365,6 +374,7 @@ class ExcelDataDictionary:
         primary_key_col_header = header_map.get("primary_key")
         foreign_key_col_header = header_map.get("foreign_key_target")
         description_col_header = header_map.get("column_description")
+        required_col_header = header_map.get("required")
         return (
             table_col_header,
             column_col_header,
@@ -376,6 +386,7 @@ class ExcelDataDictionary:
             primary_key_col_header,
             foreign_key_col_header,
             description_col_header,
+            required_col_header,
         )
 
     def _extract_column_inputs(
@@ -393,6 +404,7 @@ class ExcelDataDictionary:
         primary_key_col_header: str | None,
         foreign_key_col_header: str | None,
         description_col_header: str | None,
+        required_col_header: str | None,
     ) -> _ColumnInputs:
         row_context = f"(Columns row {idx + 2})"
 
@@ -436,21 +448,38 @@ class ExcelDataDictionary:
             else None
         )
 
-        vocabulary = (
-            str(row[vocabulary_col_header]).strip()
-            if (vocabulary_col_header and not _is_missing(row[vocabulary_col_header]))
-            else None
-        )
-        foreign_key_target = (
-            str(row[foreign_key_col_header]).strip()
-            if (foreign_key_col_header and not _is_missing(row[foreign_key_col_header]))
-            else None
-        )
+        try:
+            vocabulary = (
+                parse_delimited_list(str(row[vocabulary_col_header]))
+                if (
+                    vocabulary_col_header
+                    and not _is_missing(row[vocabulary_col_header])
+                )
+                else None
+            )
+            foreign_key_target = (
+                parse_delimited_list(str(row[foreign_key_col_header]))
+                if (
+                    foreign_key_col_header
+                    and not _is_missing(row[foreign_key_col_header])
+                )
+                else None
+            )
+        except ValueError as error:
+            raise DataDictionaryImportError(f"{row_context}: {error}") from error
         description = (
             str(row[description_col_header]).strip()
             if (description_col_header and not _is_missing(row[description_col_header]))
             else None
         )
+        required = False
+        if required_col_header and not _is_missing(row[required_col_header]):
+            required_value = str(row[required_col_header]).strip()
+            if required_value.upper() != "Y":
+                raise DataDictionaryImportError(
+                    f"{row_context}: Required must be 'Y' or blank (got {required_value!r})."
+                )
+            required = True
 
         try:
             data_type = DataType.parse(str(row[data_type_col_header]))
@@ -479,6 +508,7 @@ class ExcelDataDictionary:
             foreign_key_target=foreign_key_target,
             description=description,
             has_enumerations=has_enumerations,
+            required=required,
             row_context=row_context,
         )
 
@@ -496,6 +526,7 @@ class ExcelDataDictionary:
             foreign_key=inputs.foreign_key_target,
             description=inputs.description,
             enumerations=enums_for_column,
+            required=inputs.required,
         )
 
 

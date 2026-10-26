@@ -211,7 +211,7 @@ def test_validate_preserves_large_integer_with_mixed_numeric_text_formats() -> N
     assert dataset[TABLE_NAME].data["INT"].tolist() == [9007199254740993, 2, 3]
 
 
-def test_path_import_normalizes_null_tokens_before_type_conversion(tmp_path) -> None:
+def test_path_import_normalises_null_tokens_before_type_conversion(tmp_path) -> None:
     csv_path = tmp_path / "NULLABLE.csv"
     DataFrame(
         {
@@ -245,7 +245,40 @@ def test_path_import_normalizes_null_tokens_before_type_conversion(tmp_path) -> 
     assert values.iloc[2] == 2
 
 
-def test_apply_data_types_does_not_repeat_null_normalization() -> None:
+def test_path_import_can_defer_dtype_application(tmp_path) -> None:
+    csv_path = tmp_path / "NULLABLE.csv"
+    DataFrame({"ID": [1, 2], "VALUE": ["null", "2"]}).to_csv(csv_path, index=False)
+    dataset = Dataset.create_from(csv_path)
+    dataset.import_dictionary(
+        Dictionary(
+            name="Deferred import dtypes",
+            tables=[
+                Table(
+                    name="NULLABLE",
+                    columns=[
+                        Column("ID", 1, "int", primary_key=1),
+                        Column("VALUE", 2, "int"),
+                    ],
+                )
+            ],
+        )
+    )
+    dataset.validate(feedback=False)
+
+    dataset.import_data(apply_dtypes=False)
+    item = dataset["NULLABLE"]
+
+    assert item.validated
+    assert item.data["VALUE"].isna().tolist() == [True, False]
+    assert str(item.data["VALUE"].dtype) == "string"
+
+    item.apply_dictionary()
+
+    assert str(item.data["VALUE"].dtype) == "Int64"
+    assert item.data["VALUE"].iloc[1] == 2
+
+
+def test_apply_data_types_does_not_repeat_null_normalisation() -> None:
     dataset = get_mixed_dtype_dataset()
     converted = apply_data_types(
         DataFrame({"STR": Series(["null", "x", "y"], dtype="string")}),
@@ -255,7 +288,7 @@ def test_apply_data_types_does_not_repeat_null_normalization() -> None:
     assert converted["STR"].iloc[0] == "null"
 
 
-def test_dataframe_dictionary_source_normalizes_null_tokens() -> None:
+def test_dataframe_dictionary_source_normalises_null_tokens() -> None:
     dataset = Dataset.create_from(
         {
             TABLE_NAME: DataFrame(
@@ -289,7 +322,7 @@ def test_dataframe_dictionary_source_normalizes_null_tokens() -> None:
     assert item.data["VALUE"].iloc[2] == 2
 
 
-def test_path_chunk_iteration_normalizes_null_tokens_before_type_conversion(
+def test_path_chunk_iteration_normalises_null_tokens_before_type_conversion(
     tmp_path,
 ) -> None:
     csv_path = tmp_path / "NULLABLE.csv"

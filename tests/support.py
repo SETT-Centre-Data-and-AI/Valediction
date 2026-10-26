@@ -37,6 +37,8 @@ def compare_dictionary_columns(
                 "name",
                 "data_type",
                 "length",
+                "required",
+                "vocabulary",
                 "primary_key",
                 "foreign_key",
                 "description",

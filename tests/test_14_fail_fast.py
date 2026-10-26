@@ -21,7 +21,7 @@ def _frame(keys: list[str], values: list[str]) -> DataFrame:
     return DataFrame({"PK_TEXT": keys, "VALUE_INT": values})
 
 
-def _dictionary(table_names: list[str]) -> Dictionary:
+def _dictionary(table_names: list[str], *, required_value: bool = False) -> Dictionary:
     return Dictionary(
         name="Fail-fast validation",
         tables=[
@@ -29,7 +29,7 @@ def _dictionary(table_names: list[str]) -> Dictionary:
                 name=table_name,
                 columns=[
                     Column("PK_TEXT", 1, "text", length=3, primary_key=1),
-                    Column("VALUE_INT", 2, "int"),
+                    Column("VALUE_INT", 2, "int", required=required_value),
                 ],
             )
             for table_name in table_names
@@ -117,6 +117,23 @@ def test_item_validate_fail_fast_stops_before_later_csv_chunks(tmp_path) -> None
         dataset["FIRST"].validate(chunk_size=2, feedback=False, fail_fast=True)
 
     _assert_first_check_error(exc_info.value)
+
+
+def test_item_validate_fail_fast_stops_on_required_null_in_first_chunk(
+    tmp_path,
+) -> None:
+    csv_path = tmp_path / "FIRST.csv"
+    _frame(["AB", "CD", "EF", "GH"], ["", "2", "", "4"]).to_csv(csv_path, index=False)
+    dataset = Dataset.create_from(csv_path)
+    dataset.import_dictionary(_dictionary(["FIRST"], required_value=True))
+
+    with pytest.raises(DataIntegrityError) as exc_info:
+        dataset["FIRST"].validate(chunk_size=2, feedback=False, fail_fast=True)
+
+    _assert_first_check_error(exc_info.value)
+    assert [(issue.type, issue.ranges) for issue in dataset["FIRST"].issues] == [
+        (IssueType.REQUIRED_NULL, [Range(0, 0)])
+    ]
 
 
 def test_dataset_validate_fail_fast_stops_after_first_failing_item() -> None:

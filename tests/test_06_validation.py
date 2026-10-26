@@ -2,14 +2,17 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from pandas import DataFrame
 
 from valediction.convenience import validate
 from valediction.data_types.data_types import DataType
 from valediction.datasets.datasets import Dataset
 from valediction.demo import DEMO_DATA, DEMO_DICTIONARY
+from valediction.dictionary.model import Column, Dictionary, Table
 from valediction.exceptions import DataDictionaryImportError, DataIntegrityError
 from valediction.integrity import get_config, reset_default_config
 from valediction.validation.issues import IssueType, Range
+from valediction.validation.validation import Validator
 
 
 # Parameters
@@ -61,6 +64,55 @@ def test_validation_feedback():
     dataset = create_dataset()
     dataset.validate(feedback=True)
     dataset.check()
+
+
+@pytest.mark.parametrize(
+    ("primary_key", "enforce_no_null_columns", "expected_steps"),
+    [
+        (True, False, 15),
+        (True, True, 16),
+        (False, False, 10),
+        (False, True, 11),
+    ],
+)
+def test_validation_progress_total_matches_applicable_steps(
+    monkeypatch: pytest.MonkeyPatch,
+    primary_key: bool,
+    enforce_no_null_columns: bool,
+    expected_steps: int,
+) -> None:
+    get_config().enforce_no_null_columns = enforce_no_null_columns
+    dataset = Dataset.create_from({"TEST": DataFrame({"ID": ["1", "2"]})})
+    column = Column(
+        name="ID",
+        order=1,
+        data_type=DataType.TEXT,
+        length=1,
+        primary_key=1,
+        required=not primary_key,
+    )
+    table = Table(name="TEST", columns=[column])
+    if not primary_key:
+        column.primary_key = None
+        monkeypatch.setattr(Table, "check", lambda self, instantiation=False: None)
+
+    dictionary = Dictionary(tables=[table])
+    dataset.import_dictionary(dictionary)
+
+    item = dataset[0]
+    validator = Validator(
+        dataset_item=item,
+        table_dictionary=item.table_dictionary,
+        feedback=True,
+    )
+    assert validator._Validator__count_single_steps == 2 + int(enforce_no_null_columns)
+    assert validator._Validator__count_chunk_steps == (13 if primary_key else 8)
+
+    validator.validate()
+
+    progress = validator.progress
+    assert progress.total_steps == expected_steps
+    assert progress.completed_steps == expected_steps
 
 
 def test_validation_import(chunk_size):
@@ -161,6 +213,9 @@ def test_validation_raises_pk_nulls(chunk_size):
     df = dataset[0].data
     table_dictionary = dataset[0].table_dictionary
     pk_columns = table_dictionary.get_primary_keys()
+    for column in table_dictionary:
+        if column.name in pk_columns:
+            column.required = True
 
     # Set the first row PKs to Null
     df.loc[0, pk_columns] = None
@@ -177,6 +232,58 @@ def test_validation_raises_pk_nulls(chunk_size):
     ]
     assert issues
     assert issues[0].ranges == [Range(0, 0)]
+    assert not [
+        issue
+        for issue in dataset[0].validator.issues
+        if issue.type == IssueType.REQUIRED_NULL
+    ]
+
+
+@pytest.mark.parametrize("as_csv", [False, True], ids=["dataframe", "csv"])
+@pytest.mark.parametrize("chunk_size", [None, 2], ids=["single_chunk", "chunked"])
+def test_required_column_nulls_report_row_ranges(as_csv, chunk_size, tmp_path):
+    data = DataFrame(
+        {
+            "ID": ["1", "2", "3", "4", "5"],
+            "REQUIRED_VALUE": ["ok", "", "ok", "null", "ok"],
+            "OPTIONAL_VALUE": ["", "ok", "null", "ok", "none"],
+        },
+        dtype="string",
+    )
+    if as_csv:
+        csv_path = tmp_path / "TABLE.csv"
+        data.to_csv(csv_path, index=False)
+        data = csv_path
+
+    dataset = Dataset.create_from({"TABLE": data})
+    dataset.import_dictionary(
+        Dictionary(
+            name="Required columns",
+            tables=[
+                Table(
+                    name="TABLE",
+                    columns=[
+                        Column("ID", 1, "text", length=10, primary_key=1),
+                        Column("REQUIRED_VALUE", 2, "text", length=10, required=True),
+                        Column("OPTIONAL_VALUE", 3, "text", length=10),
+                    ],
+                )
+            ],
+        )
+    )
+
+    dataset.validate(feedback=False, chunk_size=chunk_size)
+    with pytest.raises(DataIntegrityError):
+        dataset.check()
+
+    issues = [
+        issue
+        for issue in dataset["TABLE"].validator.issues
+        if issue.type == IssueType.REQUIRED_NULL
+    ]
+    assert len(issues) == 1
+    assert issues[0].column == "REQUIRED_VALUE"
+    assert issues[0].ranges == [Range(1, 1), Range(3, 3)]
 
 
 def test_validation_raises_pk_collision(chunk_size):

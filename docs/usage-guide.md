@@ -157,8 +157,10 @@ Dictionaries contain metadata around tables and columns, including:
  - Data types
  - Primary key assignment
  - Lengths (for text columns)
+ - Required values (`Y` disallows nulls; blank allows nulls)
  - Enumerations (decodable column values) - _not currently enforced in validation_
- - Foreign key targets - _not currently enforced in validation_
+ - Vocabularies (one or more code systems, e.g. `ICD-10` or `SNOMED`) - _not currently enforced in validation_
+ - Foreign key targets (one or more `TABLE.COLUMN` alternatives; targets are checked when importing the dictionary but not enforced against dataset values) - _not currently enforced in validation_
 
 The `Dictionary` comprises nested iterable lists of tables and columns, indexable by index (`Dictionary[2][0]`) or name (`Dictionary['LAB_TESTS']['PATIENT_ID']`).
 
@@ -223,10 +225,14 @@ Data dictionaries can be manually created in Python, allowing a user to set tabl
  - data_type (text, integer, float, date, or timestamp)
  - length (if text)
  - primary_key (numeric order within key)
+ - required (`True` to disallow null values; defaults to `False`)
  - enumerations (as a dict of code: value pairs)
- - foreign_key (format = 'TABLE.COLUMN')
+ - vocabulary (a list of code systems, e.g. `['ICD-10', 'SNOMED']`)
+ - foreign_key (a list of `TABLE.COLUMN` alternatives)
 
-Enumerations and foreign keys are not currently enforced during validation. Primary keys and column orders cannot conflict within a single table. Length can only be applied to text columns. All table/column names are normalised to uppercase.
+Vocabulary and foreign-key values are stored as lists when populated. In Excel, multiple values may be separated by `|` or `/`, with surrounding whitespace ignored; exported dictionaries use ` | `. Every foreign-key target must refer to an existing table and column when the dictionary is imported. Foreign-key relationships and vocabularies are not enforced against dataset values during validation (to be implemented in a future version). Enumerations retain their separate code-to-description dictionary format and are not currently enforced during validation. Primary keys and column orders cannot conflict within a single table. Length can only be applied to text columns.
+
+For `Required`, enter `Y` to report null values in that column during validation; leave the cell blank to allow them. The marker is case-insensitive, and other nonblank values are invalid. Older dictionary workbooks without a `Required` column remain importable and treat all non-primary-key columns as nullable. Primary-key nulls continue to use the existing primary-key validation issue.
 
 Here, we create a dictionary with the demo dataset's DIAGNOSIS table:
 
@@ -372,10 +378,13 @@ Validation arguments are as follows:
  - `feedback`: turn off progress for small performance improvement
  - `chunk_size`: where the `Dataset` contains items pointing to a `Path`, validate the data in chunks to optimise RAM (note: Valediction may run significantly faster when feeding `chunk_size=None`, as primary key hashing/cacheing across chunks is bypassed)
  - `fail_fast`: when `True`, stop after the first validation check that finds issues and raise `DataIntegrityError`. All offending rows found by that check are retained, but later checks, CSV chunks, and tables are skipped, so more issues may exist. Partial issues remain available on the affected `DatasetItem` or `Dataset`; the convenience `validate()` function attaches the partial dataset to the exception. Defaults to `False`, which preserves exhaustive issue collection without raising from `validate()`.
+ - `apply_dtypes`: advanced option, defaults to `True`. Set to `False` to validate without immediately applying dictionary dtypes to in-memory DataFrames. Validation and issue detection still run normally. Downstream integrations that only need to inspect or upload validated data can defer conversion and call `apply_dictionary()` when typed data is needed.
 
 Validation runtimes can be explored by calling `dataset['table_name'].validation_runtimes`
 
 **Note**: When RAM constraints do not apply, Valediction should run significantly faster when not chunking validation (i.e. first running `dataset.import_data()` or setting `chunk_size=None`). This is because primary key values do not need to be hashed and cached for comparison across chunks. Instead, Valediction will use vectorised checking for duplicates. 
+
+For advanced downstream workflows, dtype conversion can also be deferred when materialising or streaming validated data: use `dataset.import_data(apply_dtypes=False)` to import validated CSV data without casting columns, or `item.iterate_data_chunks(apply_dtypes=False)` to yield validated CSV chunks without casting. Null-token normalisation is still applied. These controls only defer conversion; they do not skip validation. Defaults remain enabled, and `dataset.apply_dictionary()` applies the dictionary later.
 
 
 ## 🐞 Issue Inspection <a id="issue_inspection"></a>

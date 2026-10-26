@@ -11,7 +11,31 @@ from valediction.dictionary.helpers import (
     _check_primary_key,
 )
 from valediction.exceptions import DataDictionaryError
-from valediction.support import _normalise, _strip, list_as_bullets
+from valediction.support import (
+    _normalise,
+    _strip,
+    list_as_bullets,
+    parse_delimited_list,
+)
+
+
+def _normalise_metadata_list(value: str | list[str] | None) -> list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            return parse_delimited_list(value)
+        except ValueError as error:
+            raise DataDictionaryError(str(error)) from error
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise DataDictionaryError(
+            "Metadata values must be strings or lists of strings."
+        )
+
+    items = [item.strip() for item in value]
+    if any(not item for item in items):
+        raise DataDictionaryError("Metadata lists cannot contain empty items.")
+    return items
 
 
 class Column:
@@ -22,9 +46,9 @@ class Column:
         order (int): order of the column
         data_type (DataType | str): data type of the column
         length (int | None): maximum length of the column
-        vocabulary (str | None): code vocabulary of the column (e.g. ICD or SNOMED)
+        vocabulary (list[str] | None): code vocabularies of the column (e.g. ICD or SNOMED)
         primary_key (int | None): order of the column in the table primary key (if applicable)
-        foreign_key (str | None): table.column identity of the foreign key (if applicable)
+        foreign_key (list[str] | None): table.column identities of foreign key alternatives
         enumerations (dict[str | int, str | int] | None): dictionary of code: value enumerations of the column
         description (str | None): description of the column
         datetime_format (str | None): identified datetime format of the column
@@ -36,25 +60,51 @@ class Column:
         order: int,
         data_type: DataType | str,
         length: int | None = None,
-        vocabulary: str | None = None,
+        vocabulary: str | list[str] | None = None,
         primary_key: int | None = None,
-        foreign_key: str | None = None,
+        foreign_key: str | list[str] | None = None,
         enumerations: dict[str | int, str | int] | None = None,
         description: str | None = None,
         datetime_format: str | None = None,
+        required: bool = False,
     ):
         self.name = _strip(name)
         self.order = int(order) if order is not None else None
         self.data_type: DataType = None
         self.length = int(length) if length is not None else None
-        self.vocabulary = vocabulary
+        self.vocabulary = _normalise_metadata_list(vocabulary)
         self.primary_key = int(primary_key) if primary_key is not None else None
-        self.foreign_key = foreign_key
+        self.foreign_key = _normalise_metadata_list(foreign_key)
         self.enumerations = enumerations or dict()
         self.description = description
         self.datetime_format = datetime_format
+        self.required = required
         self.set_data_type(data_type)
         self.check()
+
+    @property
+    def enumeration(self) -> dict[str | int, str | int]:
+        return self.enumerations
+
+    @enumeration.setter
+    def enumeration(self, value: dict[str | int, str | int]) -> None:
+        self.enumerations = value
+
+    @property
+    def foreign_keys(self) -> list[str] | None:
+        return self.foreign_key
+
+    @foreign_keys.setter
+    def foreign_keys(self, value: list[str] | None) -> None:
+        self.foreign_key = value
+
+    @property
+    def vocabularies(self) -> list[str] | None:
+        return self.vocabulary
+
+    @vocabularies.setter
+    def vocabularies(self, value: list[str] | None) -> None:
+        self.vocabulary = value
 
     # Magic
     def __repr__(self) -> str:
@@ -93,6 +143,8 @@ class Column:
         errors.extend(_check_order(self.order))
         errors.extend(_check_data_type(self.data_type, self.length))
         errors.extend(_check_primary_key(self.primary_key, self.data_type))
+        if not isinstance(self.required, bool):
+            errors.append("required must be a boolean")
 
         if errors:
             raise DataDictionaryError(

@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from math import trunc
@@ -41,6 +42,17 @@ def _normalise(name: str) -> str:
 
 def _strip(name: str) -> str:
     return name.strip()
+
+
+def parse_delimited_list(value: str | None) -> list[str] | None:
+    if value is None or not value.strip():
+        return None
+
+    items = re.split(r"[|/]", value)
+    trimmed = [item.strip() for item in items]
+    if any(not item for item in trimmed):
+        raise ValueError(f"Delimited list contains an empty item: {value!r}")
+    return trimmed
 
 
 def _get_runtime_string(runtime: timedelta) -> str:

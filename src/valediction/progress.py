@@ -8,13 +8,32 @@ from tqdm import tqdm
 from valediction.support import BOLD_GREEN, BOLD_RED, RESET, calculate_runtime
 
 FORMAT_KNOWN_TOTAL = (
-    "{desc} {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} "
+    "{desc} {percentage:3.0f}%|{bar}| {n_fmt:>3}/{total_fmt:<3} "
     "[{elapsed}<{remaining}, {rate_fmt}{postfix}]"
 )
 
 FORMAT_UNKNOWN_TOTAL = (
-    "{desc} {percentage:3.0f}%|{bar}| ?/? [{elapsed}<{remaining}, {rate_fmt}{postfix}]"
+    "{desc} {percentage:3.0f}%|{bar}|   -/?   [{elapsed}<??:??, {rate_fmt}{postfix}]"
 )
+
+
+def _format_rate(rate: float | None, unit: str) -> str:
+    if rate:
+        inverse_rate = 1 / rate
+        if inverse_rate > 1:
+            return f"{inverse_rate:6.2f}s/{unit}"
+        return f"{rate:6.2f}{unit}/s"
+    return f"{'?':>6}{unit}/s"
+
+
+class _AlignedTqdm(tqdm):
+    def __str__(self) -> str:
+        format_dict = self.format_dict
+        rate = format_dict["rate"]
+        if not rate and format_dict["elapsed"] > 0:
+            rate = format_dict["n"] / format_dict["elapsed"]
+        format_dict["rate_fmt"] = _format_rate(rate=rate, unit=format_dict["unit"])
+        return self.format_meter(**format_dict)
 
 
 class Progress:
@@ -83,13 +102,13 @@ class Progress:
             0.0 if self.smoothing_steps == 0 else 2.0 / (self.smoothing_steps + 1)
         )
 
-        self.bar = tqdm(
+        self.bar = _AlignedTqdm(
             total=self.total_steps,
             unit=self.unit,
             desc=self.desc,
+            bar_format=(FORMAT_KNOWN_TOTAL if self.est_total else FORMAT_UNKNOWN_TOTAL),
             smoothing=smoothing,
         )
-        self.__set_bar_format()
         if self.current_step:
             self.bar.set_postfix_str(self.current_step)
 
@@ -178,7 +197,7 @@ class Progress:
         if not self.enabled:
             return
 
-        if self.bar:
+        if self.bar is not None:
             try:
                 self.bar.close()
             finally:

@@ -37,6 +37,7 @@ def validate(
     chunk_size: int | None = 10_000_000,
     feedback: bool = True,
     fail_fast: bool = False,
+    apply_dtypes: bool = True,
 ) -> Dataset:
     """Validate the dataset against the dictionary. Run `dataset.check()` afterwards to
     raise an Exception if issues. If `fail_fast` is True, validation will stop at the
@@ -54,6 +55,10 @@ def validate(
         feedback (bool, optional): whether to provide user feedback on progress. Defaults to True.
         fail_fast (bool, optional): stop after the first issue-producing check and raise
             with the partial Dataset and issues. Defaults to False.
+        apply_dtypes (bool, optional): Apply dictionary dtypes to in-memory data after
+            successful validation. This option is intended for downstream extensions that need
+            to defer conversion until extended validation is complete. It is not recommended
+            to change this value in typical usage. Defaults to True.
 
     Returns:
         Dataset: dataset, with or without Issues
@@ -72,13 +77,14 @@ def validate(
             )
 
     if import_data:
-        _dataset.import_data()
+        _dataset.import_data(apply_dtypes=apply_dtypes)
 
     try:
         _dataset.validate(
             chunk_size=chunk_size,
             feedback=feedback,
             fail_fast=fail_fast,
+            apply_dtypes=apply_dtypes,
         )
     except DataIntegrityError as error:
         if fail_fast:
