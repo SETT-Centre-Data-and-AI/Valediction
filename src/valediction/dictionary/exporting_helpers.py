@@ -71,7 +71,7 @@ def _collect_conditional_formats(worksheet: Worksheet) -> Iterable[CFRuleInfo]:
         return
 
     for sqref, rules in items:
-        # normalize ranges to list[str]
+        # normalise ranges to list[str]
         if isinstance(sqref, (list, tuple)):
             ranges = [str(r) for r in sqref]
         else:
@@ -174,7 +174,7 @@ def _cf_entries(cf: ConditionalFormattingList) -> list[tuple[object, list]]:
 
 
 def _key_ranges(key: ConditionalFormatting | MultiCellRange) -> list[str]:
-    """Normalize a CF dict key into a list of A1 range strings."""
+    """Normalise a CF dict key into a list of A1 range strings."""
     if hasattr(key, "sqref") and hasattr(key.sqref, "ranges"):  # ConditionalFormatting
         return [str(r) for r in key.sqref.ranges]
     if hasattr(key, "ranges"):  # MultiCellRange

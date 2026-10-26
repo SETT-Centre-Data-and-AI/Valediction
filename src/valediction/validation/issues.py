@@ -16,6 +16,7 @@ class IssueType(Enum):
     MISSING_COLUMN = "MissingColumn"
     EXTRA_COLUMN = "ExtraColumn"
     FULLY_NULL_COLUMN = "FullyNullColumn"
+    REQUIRED_NULL = "RequiredColumnNull"
 
     # Keys
     PK_NULL = "PrimaryKeyNull"

@@ -1,3 +1,26 @@
+## v1.9.1 (2026-10-23)
+
+### Feat
+
+- **data-dictionary**: added 'Required' column and wired in checks
+
+### Refactor
+
+- **columns**: added single/plural redirects for enumerations, foreign_key, and vocabulary to dictionary.table.column
+
+## v1.9.0 (2026-10-22)
+
+### Feat
+
+- **progress**: improved alignment
+- **progress**: improved alignment
+- **dictionary**: support multiple vocabulary and foreign-key values
+- **datasets,-progress**: defer dtype conversion for downstream extension and align progress rates
+
+### Fix
+
+- **progress**: corrected step calculations
+
 ## v1.8.3 (2026-10-14)
 
 ### Feat

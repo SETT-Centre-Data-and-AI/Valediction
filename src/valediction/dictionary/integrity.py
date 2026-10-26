@@ -27,6 +27,7 @@ DD_COLUMN_MAP = {
         "order",
         "data type",
         "length",
+        "required",
         "vocabularies",
         "enumerations",
         "primary key",

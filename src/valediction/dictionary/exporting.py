@@ -339,10 +339,12 @@ class Exporter:
                         "length": column.length
                         if column.data_type.allows_length()
                         else None,
-                        "vocabularies": column.vocabulary,
+                        "required": "Y" if column.required else None,
+                        "vocabularies": " | ".join(column.vocabulary or []) or None,
                         "enumerations": "Y" if column.enumerations else None,
                         "primary key": column.primary_key,
-                        "foreign key target": column.foreign_key,
+                        "foreign key target": " | ".join(column.foreign_key or [])
+                        or None,
                         "column description": column.description,
                         # 'checks' is calculated by the template
                     }

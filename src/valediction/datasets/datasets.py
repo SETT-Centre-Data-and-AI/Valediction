@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -61,6 +61,7 @@ class DatasetItem:
     _validation_runtimes: dict[str, timedelta] = None
     _dictionary_runtimes: dict[str, timedelta] = None
     _padding: int = 0
+    _dtypes_applied: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self):
         object.__setattr__(self, "issues", Issues())
@@ -139,6 +140,8 @@ class DatasetItem:
         chunk_size: int | None = 10_000_000,
         feedback: bool = True,
         fail_fast: bool = False,
+        *,
+        apply_dtypes: bool = True,
     ) -> None:
         """
         Summary:
@@ -151,6 +154,10 @@ class DatasetItem:
             feedback (bool): Provide user feedback on progress (default: True)
             fail_fast (bool): Stop after the first issue-producing check and raise with
                 the partial issues (default: False)
+            apply_dtypes (bool): Apply dictionary dtypes to in-memory data after successful
+                validation. This option is intended for downstream extensions that need to
+                defer conversion until extended validation is complete. It is not recommended
+                to change this value in typical usage. Defaults to True.
 
         Raises:
             DataDictionaryImportError: if there is an issue with importing the dictionary
@@ -170,7 +177,8 @@ class DatasetItem:
             validator.validate()
             object.__setattr__(self, "validated", True)
             object.__setattr__(self, "issues", Issues())
-            if self.is_dataframe:
+            object.__setattr__(self, "_dtypes_applied", False)
+            if self.is_dataframe and apply_dtypes:
                 self.apply_dictionary()
 
         # Issues detected
@@ -240,7 +248,7 @@ class DatasetItem:
             )
 
         if self.is_path:
-            self.import_data()
+            self.import_data(apply_dtypes=False)
 
         object.__setattr__(
             self,
@@ -252,12 +260,18 @@ class DatasetItem:
                 self.validator._date_orders if self.validator else None,
             ),
         )
+        object.__setattr__(self, "_dtypes_applied", True)
 
     # Data Import
-    def import_data(self):
+    def import_data(self, *, apply_dtypes: bool = True):
         """
         Summary:
             Import the data associated with this DatasetItem into memory.
+
+        Arguments:
+            apply_dtypes (bool): Apply dictionary dtypes after importing data when this item
+                has been validated and has an attached dictionary (default: True). Null-token
+                normalisation still occurs for validated data when this is False.
 
         Raises:
             DataIntegrityError: if there is an issue with the integrity of the data
@@ -271,24 +285,38 @@ class DatasetItem:
             if self.validated:
                 data = _set_nulls(data)
             object.__setattr__(self, "data", data)
-            if self.table_dictionary and self.validated:
+            if self.table_dictionary and self.validated and apply_dtypes:
                 self.apply_dictionary()
 
-    def iterate_data_chunks(self, chunk_size: int = 10_000_000) -> Iterator[FrameChunk]:
+    def iterate_data_chunks(
+        self,
+        chunk_size: int = 10_000_000,
+        warn: bool = True,
+        *,
+        apply_dtypes: bool = True,
+    ) -> Iterator[FrameChunk]:
         """
         Summary:
-            Yields data in chunks. If `data` is a DataFrame, yields the whole DataFrame once within
-            a FrameChunk. If the Dataset is validated, dtypes will be applied to the DataFrame.
-            If not, will warn and return as strings types.
+            Yields data in chunks. CSV chunks from validated data have null tokens normalised;
+            dictionary dtypes are applied to validated chunks when `apply_dtypes` is True.
+            If `data` is a DataFrame, yields the whole DataFrame once within a FrameChunk.
+            Unvalidated CSV data is yielded with string dtypes and a warning is printed when
+            `warn` is True.
 
         Args:
-            chunk_size (int, optional): chunk_size (int | None): Size of chunks for reading data to optimise RAM usage,
+            chunk_size (int, optional): Size of chunks for reading data to optimise RAM usage,
                 if reading from CSV (default: 10_000_000)
+            warn (bool, optional): Print a warning when the item has not been validated
+                (default: True).
+            apply_dtypes (bool, optional): Apply dictionary dtypes to each validated CSV chunk.
+                Null-token normalisation is still applied when this is False. For DataFrame-backed
+                items, setting this to False yields the existing DataFrame without applying deferred
+                dtypes (default: True).
 
         Yields:
             Iterator[FrameChunk]: Iterator of FrameChunks, with each chunk containing a DataFrame as `chunk.df`
         """
-        if not self.validated:
+        if warn and not self.validated:
             print_bold_red("WARNING: ", end="")
             print_red(
                 f"DatasetItem '{self.name}' has not been validated. "
@@ -298,21 +326,23 @@ class DatasetItem:
             for chunk in iter_csv_chunks(path=self.data, chunk_size=chunk_size):
                 if self.validated:
                     df = _set_nulls(chunk.df)
-                    datetime_formats = (
-                        self.validator._dt_format_cache if self.validator else None
-                    )
-                    df = apply_data_types(
-                        df,
-                        self.table_dictionary,
-                        datetime_formats,
-                        self.validator._date_orders if self.validator else None,
-                    )
+                    if apply_dtypes:
+                        datetime_formats = (
+                            self.validator._dt_format_cache if self.validator else None
+                        )
+                        df = apply_data_types(
+                            df,
+                            self.table_dictionary,
+                            datetime_formats,
+                            self.validator._date_orders if self.validator else None,
+                        )
                     chunk.update_df(df)
                 yield chunk
 
         if self.is_dataframe:
+            if self.validated and apply_dtypes and not self._dtypes_applied:
+                self.apply_dictionary()
             n = len(self.data)
-            # apply_data_types() will already have been applied if validated
             yield FrameChunk(
                 df=self.data,
                 start=0,
@@ -635,6 +665,8 @@ class Dataset(list[DatasetItem]):
     def import_data(
         self,
         name: str | None = None,
+        *,
+        apply_dtypes: bool = True,
     ) -> None:
         """
         Summary:
@@ -642,17 +674,20 @@ class Dataset(list[DatasetItem]):
 
         Arguments:
             name (str | None): The name of the table to import data into. If None, all tables are imported.
+            apply_dtypes (bool): Apply dictionary dtypes after importing validated items that
+                have an attached dictionary (default: True). Null-token normalisation still
+                occurs for validated data when this is False.
 
         Raises:
             FileNotFoundError: If the file specified by name does not exist.
         """
         if name:
-            self[name].import_data()
+            self[name].import_data(apply_dtypes=apply_dtypes)
 
         else:
             for item in self:
                 if item.is_path:
-                    item.import_data()
+                    item.import_data(apply_dtypes=apply_dtypes)
 
     def export_data(
         self,
@@ -739,6 +774,8 @@ class Dataset(list[DatasetItem]):
         chunk_size: int | None = 10_000_000,
         feedback: bool = True,
         fail_fast: bool = False,
+        *,
+        apply_dtypes: bool = True,
     ) -> None:
         """
         Summary:
@@ -749,6 +786,10 @@ class Dataset(list[DatasetItem]):
             feedback (bool): Provide user feedback on progress (default: True)
             fail_fast (bool): Stop after the first failing table and raise with the
                 partial issues (default: False)
+            apply_dtypes (bool): Apply dictionary dtypes to in-memory data after successful
+                validation. This option is intended for downstream extensions that need to
+                defer conversion until extended validation is complete. It is not recommended
+                to change this value in typical usage. Defaults to True.
 
         Returns:
             None
@@ -767,6 +808,7 @@ class Dataset(list[DatasetItem]):
                     chunk_size=chunk_size,
                     feedback=feedback,
                     fail_fast=fail_fast,
+                    apply_dtypes=apply_dtypes,
                 )
             except DataIntegrityError as error:
                 if fail_fast:
@@ -797,7 +839,7 @@ class Dataset(list[DatasetItem]):
     def __items_with_issues(self) -> list[str]:
         items_with_issues = [item.name for item in self if len(item.issues) > 0]
         string = (
-            ("" + ",".join(items_with_issues) + "")
+            ("" + ", ".join(items_with_issues) + "")
             if len(items_with_issues) > 0
             else ""
         )
@@ -806,7 +848,9 @@ class Dataset(list[DatasetItem]):
     def check(self, readout: bool = False) -> bool:
         """
         Summary:
-            Check the validity of the Dataset.
+            Check the validity of the Dataset. This includes verifying that all tables have been validated
+            and that there are no integrity issues with the data. If any issues are found, a DataIntegrityError
+            is raised with details of the problems.
 
         Raises:
             DataIntegrityError: If there is an issue with the integrity of the data, either because:

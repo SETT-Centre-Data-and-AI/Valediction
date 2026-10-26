@@ -41,6 +41,71 @@ def test_valid_dictionary_passes(valid_dictionary):
     assert valid_dictionary.column_count == 12
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, None),
+        ("", None),
+        (" ICD-10 | SNOMED ", ["ICD-10", "SNOMED"]),
+        ("ICD-10/SNOMED", ["ICD-10", "SNOMED"]),
+        ([" ICD-10 ", "SNOMED"], ["ICD-10", "SNOMED"]),
+        (["ICD-10", "ICD-10"], ["ICD-10", "ICD-10"]),
+    ],
+)
+def test_column_metadata_is_normalised_to_lists(value, expected):
+    column = Column(
+        name="CODE",
+        order=1,
+        data_type="text",
+        length=20,
+        vocabulary=value,
+        foreign_key=value,
+    )
+
+    assert column.vocabulary == expected
+    assert column.foreign_key == expected
+
+
+def test_column_metadata_aliases_delegate_to_existing_attributes():
+    column = Column(name="CODE", order=1, data_type="text", length=20)
+    enumeration = {"A": "Alpha"}
+    foreign_keys = ["TABLE.COLUMN"]
+    vocabularies = ["ICD-10"]
+
+    column.enumeration = enumeration
+    column.foreign_keys = foreign_keys
+    column.vocabularies = vocabularies
+
+    assert column.enumerations is enumeration
+    assert column.foreign_key is foreign_keys
+    assert column.vocabulary is vocabularies
+    assert column.enumeration is enumeration
+    assert column.foreign_keys is foreign_keys
+    assert column.vocabularies is vocabularies
+
+
+def test_column_required_defaults_to_false_and_accepts_boolean():
+    optional = Column(name="OPTIONAL", order=1, data_type="text", length=20)
+    required = Column(
+        name="REQUIRED", order=2, data_type="text", length=20, required=True
+    )
+
+    assert optional.required is False
+    assert required.required is True
+
+
+@pytest.mark.parametrize("value", ["ICD||SNOMED", "ICD/", "/ICD", ["ICD", " "]])
+def test_column_metadata_rejects_empty_items(value):
+    with pytest.raises((DataDictionaryError, ValueError)):
+        Column(
+            name="CODE",
+            order=1,
+            data_type="text",
+            length=20,
+            vocabulary=value,
+        )
+
+
 # Column Name Rules #
 @pytest.mark.parametrize(
     "bad_name",

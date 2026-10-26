@@ -64,6 +64,40 @@ def test_validate_imports_demo_path_data_with_dictionary_object() -> None:
     assert all(item.validated and item.is_dataframe for item in dataset)
 
 
+def test_validate_can_defer_dictionary_dtypes() -> None:
+    dataset = validate(
+        dataset=DEMO_DATA,
+        dictionary=demo_dictionary(),
+        import_data=True,
+        apply_dtypes=False,
+        feedback=False,
+    )
+
+    assert all(item.validated and item.is_dataframe for item in dataset)
+    assert all(
+        not item._dtypes_applied
+        and all(str(dtype) == "string" for dtype in item.data.dtypes)
+        for item in dataset
+    )
+
+
+def test_validate_prepared_dataset_can_defer_dtypes_during_import() -> None:
+    prepared = create_dataset(data=DEMO_DATA, dictionary=demo_dictionary())
+    validate(dataset=prepared, feedback=False)
+
+    dataset = validate(
+        dataset=prepared,
+        import_data=True,
+        apply_dtypes=False,
+        feedback=False,
+    )
+
+    assert all(
+        item.validated and all(str(dtype) == "string" for dtype in item.data.dtypes)
+        for item in dataset
+    )
+
+
 def test_validate_prepared_dataset_uses_attached_dictionary() -> None:
     prepared = create_dataset(data=DEMO_DATA, dictionary=demo_dictionary())
 
